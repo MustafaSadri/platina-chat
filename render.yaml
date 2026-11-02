@@ -2,7 +2,7 @@
 # Secrets are declared with sync: false so Render asks for them and they never live in Git.
 services:
   - type: web
-    name: teamchat
+    name: platina-chat
     runtime: node
     plan: starter            # free instances sleep when idle, which drops WebSocket connections
     region: ohio             # same AWS region as the Neon database (us-east-2)
