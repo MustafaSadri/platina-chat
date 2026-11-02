@@ -1,4 +1,7 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+
+// Tests configure their own throwaway database and must never pick up real credentials from .env.
+if (process.env.NODE_ENV !== 'test') dotenv.config();
 
 const env = process.env;
 const bool = (v, d = false) => (v === undefined || v === '' ? d : ['1', 'true', 'yes'].includes(String(v).toLowerCase()));
