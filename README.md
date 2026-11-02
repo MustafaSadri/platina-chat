@@ -84,7 +84,7 @@ you can start the server with `TRANSLATE_PROVIDER=test` (a fake provider that on
 ## 2. Create the cloud services
 
 ### Neon PostgreSQL (database)
-1. Sign up at <https://neon.tech> → **New project** (choose the region closest to your Render region, e.g. Frankfurt).
+1. Sign up at <https://neon.tech> → **New project** (use the same region as Render: this project uses AWS US East 2 / Ohio).
 2. Create a database, e.g. `teamchat`.
 3. On the dashboard, open **Connect** and copy two connection strings:
    - **Pooled** (host contains `-pooler`) → `DATABASE_URL`
