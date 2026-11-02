@@ -1,0 +1,46 @@
+# Render Blueprint: one Node web service that serves the API, WebSockets and the web app.
+# Secrets are declared with sync: false so Render asks for them and they never live in Git.
+services:
+  - type: web
+    name: teamchat
+    runtime: node
+    plan: starter            # free instances sleep when idle, which drops WebSocket connections
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: npm start  # runs database migrations, then starts the server
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+      - key: APP_URL
+        sync: false          # e.g. https://chat.yourcompany.com
+      - key: DATABASE_URL
+        sync: false          # Neon pooled connection string
+      - key: DATABASE_URL_UNPOOLED
+        sync: false          # Neon direct connection string (migrations)
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false
+      - key: TRANSLATE_PROVIDER
+        sync: false
+      - key: DEEPL_API_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false

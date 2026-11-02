@@ -1,0 +1,367 @@
+import { useStore } from './store.js';
+
+// English strings are the keys; Russian translations below. Missing keys fall back to English.
+// Placeholders use {name}. Plural keys are objects with Intl.PluralRules categories.
+const RU = {
+  // auth
+  'Sign in with the username and password provided by your administrator.': 'Войдите, используя имя пользователя и пароль, выданные администратором.',
+  Username: 'Имя пользователя',
+  Password: 'Пароль',
+  'Sign in': 'Войти',
+  'Signing in…': 'Вход…',
+  'Private workspace — accounts are created by the administrator.': 'Закрытое рабочее пространство — учётные записи создаёт администратор.',
+  'Welcome, {name}': 'Добро пожаловать, {name}',
+  'Please replace your temporary password before continuing.': 'Пожалуйста, замените временный пароль, чтобы продолжить.',
+  'Temporary password': 'Временный пароль',
+  'Current password': 'Текущий пароль',
+  'New password': 'Новый пароль',
+  'At least 10 characters, with letters and numbers.': 'Не менее 10 символов, буквы и цифры.',
+  'Confirm new password': 'Повторите новый пароль',
+  'The new passwords do not match.': 'Новые пароли не совпадают.',
+  'Change password': 'Сменить пароль',
+  'Saving…': 'Сохранение…',
+  'Sign out': 'Выйти',
+  'Password changed. Other devices were signed out.': 'Пароль изменён. На других устройствах выполнен выход.',
+
+  // sidebar
+  Search: 'Поиск',
+  Chats: 'Чаты',
+  People: 'Люди',
+  Messages: 'Сообщения',
+  'Searching…': 'Поиск…',
+  'No messages found': 'Сообщения не найдены',
+  'New message': 'Новое сообщение',
+  'New group': 'Новая группа',
+  'Archived chats': 'Архив',
+  Settings: 'Настройки',
+  'Admin panel': 'Панель администратора',
+  Theme: 'Тема',
+  Light: 'Светлая',
+  Dark: 'Тёмная',
+  System: 'Системная',
+  Language: 'Язык',
+  chats: { one: '{n} чат', few: '{n} чата', many: '{n} чатов', other: '{n} чата' },
+  'No archived chats.': 'В архиве нет чатов.',
+  'No conversations yet.': 'Пока нет диалогов.',
+  'Start a conversation': 'Начать диалог',
+  'No messages yet': 'Сообщений пока нет',
+  'You: ': 'Вы: ',
+  'Pin to top': 'Закрепить',
+  Unpin: 'Открепить',
+  Mute: 'Без звука',
+  Unmute: 'Включить звук',
+  Archive: 'В архив',
+  Unarchive: 'Из архива',
+  'Chat archived': 'Чат перемещён в архив',
+  'Chat unarchived': 'Чат возвращён из архива',
+  'Mark as read': 'Отметить прочитанным',
+  'Clear history (for me)': 'Очистить историю (у меня)',
+  'Clear history': 'Очистить историю',
+  'Clear the history of “{title}” for you? Other members keep their copy.': 'Очистить историю «{title}» у вас? У других участников она сохранится.',
+  Clear: 'Очистить',
+  'Leave group': 'Покинуть группу',
+  'Leave “{title}”?': 'Покинуть «{title}»?',
+  Leave: 'Покинуть',
+  'Select a chat to start messaging': 'Выберите чат, чтобы начать общение',
+  'Loading…': 'Загрузка…',
+  'Connecting…': 'Подключение…',
+  typing: 'печатает',
+  'recording voice': 'записывает голосовое',
+  '{name} is {verb}…': '{name} {verb}…',
+  '{n} people are {verb}…': '{n} чел. {verb}…',
+
+  // chat
+  online: 'в сети',
+  'last seen just now': 'был(а) только что',
+  'last seen a long time ago': 'был(а) давно',
+  'last seen {n} minutes ago': 'был(а) {n} мин. назад',
+  'last seen at {time}': 'был(а) в {time}',
+  'last seen {date} at {time}': 'был(а) {date} в {time}',
+  'account inactive': 'учётная запись неактивна',
+  members: { one: '{n} участник', few: '{n} участника', many: '{n} участников', other: '{n} участника' },
+  Today: 'Сегодня',
+  Yesterday: 'Вчера',
+  'This is the beginning of your conversation': 'Это начало вашей переписки',
+  'Group “{title}”': 'Группа «{title}»',
+  'Chat not available': 'Чат недоступен',
+  'Search messages': 'Поиск сообщений',
+  '{i} of {n}': '{i} из {n}',
+  'No results': 'Нет результатов',
+  'Pinned message': 'Закреплённое сообщение',
+  selected: { one: 'Выбрано: {n}', few: 'Выбрано: {n}', many: 'Выбрано: {n}', other: 'Выбрано: {n}' },
+  Forward: 'Переслать',
+  Delete: 'Удалить',
+  Reply: 'Ответить',
+  Edit: 'Изменить',
+  'Copy text': 'Копировать текст',
+  Download: 'Скачать',
+  Pin: 'Закрепить',
+  Select: 'Выбрать',
+  Translate: 'Перевести',
+  'Show original': 'Показать оригинал',
+  'Translating…': 'Перевод…',
+  'Translated from {lang}': 'Переведено с {lang}',
+  English: 'английского',
+  Russian: 'русского',
+  'Copied to clipboard': 'Скопировано',
+  'Copy is not allowed here': 'Копирование недоступно',
+  'Drop files to send': 'Отпустите файлы для отправки',
+  'Forwarded from': 'Переслано от',
+  edited: 'изм.',
+  Retry: 'Повторить',
+  'Deleted message': 'Удалённое сообщение',
+  'Voice message': 'Голосовое сообщение',
+  Photo: 'Фото',
+  Video: 'Видео',
+  Audio: 'Аудио',
+  Open: 'Открыть',
+  'Uploading… {p}%': 'Загрузка… {p}%',
+  Outgoing: 'Исходящий',
+  Incoming: 'Входящий',
+  call: 'звонок',
+  'video call': 'видеозвонок',
+  Call: 'Звонок',
+  'Video call': 'Видеозвонок',
+  'Missed call': 'Пропущенный звонок',
+  'Missed video call': 'Пропущенный видеозвонок',
+  'Declined call': 'Отклонённый звонок',
+  'Declined video call': 'Отклонённый видеозвонок',
+  'Cancelled call': 'Отменённый звонок',
+  'Cancelled video call': 'Отменённый видеозвонок',
+  Someone: 'Кто-то',
+  'Deleted account': 'Удалённый аккаунт',
+  '{actor} created the group “{title}”': '{actor} создал(а) группу «{title}»',
+  '{actor} renamed the group to “{title}”': '{actor} переименовал(а) группу в «{title}»',
+  '{actor} added {names}': '{actor} добавил(а) {names}',
+  '{actor} removed {name}': '{actor} удалил(а) {name}',
+  '{name} left the group': '{name} покинул(а) группу',
+  '{actor} pinned “{text}”': '{actor} закрепил(а) «{text}»',
+  'a message': 'сообщение',
+  'Service message': 'Служебное сообщение',
+
+  // composer
+  Message: 'Сообщение',
+  'Edit message': 'Редактирование',
+  'Reply to {name}': 'Ответ {name}',
+  'Only admins can post in this group.': 'Писать в эту группу могут только администраторы.',
+  'This account is no longer active.': 'Эта учётная запись больше не активна.',
+  '“{name}” is larger than {mb} MB.': 'Файл «{name}» больше {mb} МБ.',
+  'Microphone permission denied.': 'Нет доступа к микрофону.',
+  'Translate draft': 'Перевести черновик',
+  'Translate to English': 'Перевести на английский',
+  'Translate to Russian': 'Перевести на русский',
+  'Translated to English': 'Переведено на английский',
+  'Translated to Russian': 'Переведено на русский',
+  Emoji: 'Эмодзи',
+  'Attach file': 'Прикрепить файл',
+  Send: 'Отправить',
+  'Record voice message': 'Записать голосовое',
+  Cancel: 'Отмена',
+
+  // info
+  'Group info': 'Информация о группе',
+  'User info': 'Информация',
+  'Group name': 'Название группы',
+  Description: 'Описание',
+  'Only admins can send messages': 'Писать могут только администраторы',
+  'Members can add people': 'Участники могут добавлять людей',
+  Save: 'Сохранить',
+  Position: 'Должность',
+  Notifications: 'Уведомления',
+  'Auto-translate incoming messages': 'Автоперевод входящих сообщений',
+  Off: 'Выкл.',
+  'To English': 'На английский',
+  'To Russian': 'На русский',
+  Add: 'Добавить',
+  '(you)': '(вы)',
+  Media: 'Медиа',
+  Files: 'Файлы',
+  Voice: 'Голосовые',
+  owner: 'владелец',
+  admin: 'админ',
+
+  // modals
+  'Search people': 'Поиск людей',
+  'No people found': 'Никого не найдено',
+  'Add members': 'Добавить участников',
+  Next: 'Далее',
+  Back: 'Назад',
+  Create: 'Создать',
+  'members selected. You will be the group owner.': { one: 'Выбран {n} участник. Вы станете владельцем группы.', few: 'Выбрано {n} участника. Вы станете владельцем группы.', many: 'Выбрано {n} участников. Вы станете владельцем группы.', other: 'Выбрано {n} участника. Вы станете владельцем группы.' },
+  'Send message': 'Написать',
+  'Remove admin rights': 'Снять права администратора',
+  'Make group admin': 'Назначить администратором',
+  'Remove from group': 'Удалить из группы',
+  'Forward to…': 'Переслать…',
+  'Search chats': 'Поиск чатов',
+  'Delete message': 'Удалить сообщение',
+  'Delete {n} messages': 'Удалить сообщения ({n})',
+  'Are you sure you want to delete this message?': 'Удалить это сообщение?',
+  'Are you sure you want to delete these messages?': 'Удалить эти сообщения?',
+  'Also delete for everyone': 'Удалить у всех',
+  'Deleted messages are hidden from the chat. Your organisation may retain a copy according to its retention policy.': 'Удалённые сообщения скрываются из чата. Организация может хранить копию согласно политике хранения.',
+  OK: 'ОК',
+  'Active sessions': 'Активные сеансы',
+  'this device': 'это устройство',
+  'Unknown device': 'Неизвестное устройство',
+  'last active {date}': 'активность {date}',
+  End: 'Завершить',
+  administrator: 'администратор',
+  Enabled: 'Включены',
+  'Blocked in browser': 'Заблокированы в браузере',
+  Enable: 'Включить',
+  'Not supported': 'Не поддерживается',
+  'Notifications enabled on this device.': 'Уведомления включены на этом устройстве.',
+  'Notifications enabled while the app is open.': 'Уведомления включены, пока приложение открыто.',
+  'Messages are encrypted in transit (HTTPS/WSS) and stored on your organisation’s servers. This app does not use end-to-end encryption.':
+    'Сообщения шифруются при передаче (HTTPS/WSS) и хранятся на серверах вашей организации. Сквозное шифрование не используется.',
+  'Message translation sends the message text to an external translation service configured by your administrator.':
+    'При переводе текст сообщения передаётся во внешний сервис перевода, настроенный администратором.',
+  New: 'Создать',
+
+  // admin
+  Employees: 'Сотрудники',
+  Groups: 'Группы',
+  Retention: 'Хранение',
+  'Audit log': 'Журнал аудита',
+  'Share these credentials with the employee through a secure channel. The password is shown only once and must be changed at first sign-in.':
+    'Передайте эти данные сотруднику по защищённому каналу. Пароль показывается только один раз и должен быть изменён при первом входе.',
+  Copy: 'Копировать',
+  Copied: 'Скопировано',
+  Done: 'Готово',
+  'Username (used to sign in)': 'Имя пользователя (для входа)',
+  'Full name': 'Полное имя',
+  'Position / department': 'Должность / отдел',
+  Role: 'Роль',
+  Employee: 'Сотрудник',
+  Administrator: 'Администратор',
+  'Can start private chats': 'Может начинать личные чаты',
+  'Can create groups': 'Может создавать группы',
+  'Create account': 'Создать учётную запись',
+  'Search employees': 'Поиск сотрудников',
+  Current: 'Текущие',
+  Removed: 'Удалённые',
+  'Add employee': 'Добавить сотрудника',
+  'private chats': 'личные чаты',
+  'no private chats': 'без личных чатов',
+  'can create groups': 'может создавать группы',
+  'no groups': 'без групп',
+  'Reset password': 'Сбросить пароль',
+  Deactivate: 'Деактивировать',
+  Reactivate: 'Активировать',
+  Remove: 'Удалить',
+  'No employees': 'Нет сотрудников',
+  active: 'активен',
+  deactivated: 'деактивирован',
+  removed: 'удалён',
+  'temp password': 'временный пароль',
+  'Deactivate account': 'Деактивация учётной записи',
+  "{name} will be signed out everywhere immediately and won't be able to sign in until reactivated.":
+    '{name} будет немедленно отключён(а) на всех устройствах и не сможет войти до повторной активации.',
+  'Account deactivated': 'Учётная запись деактивирована',
+  'Account reactivated': 'Учётная запись активирована',
+  'Remove employee': 'Удаление сотрудника',
+  'Remove {name}? Access is revoked immediately and they leave all groups. Their past messages stay available according to the retention policy. This cannot be undone.':
+    'Удалить {name}? Доступ будет немедленно отозван, сотрудник покинет все группы. Прошлые сообщения сохранятся согласно политике хранения. Это действие нельзя отменить.',
+  'Employee removed': 'Сотрудник удалён',
+  'All groups': 'Все группы',
+  'Only group admins can post (announcement channel)': 'Писать могут только администраторы группы (канал объявлений)',
+  'Revoke admin': 'Снять админа',
+  'Make admin': 'Сделать админом',
+  'Archive group': 'Архивировать группу',
+  'Archive “{title}”? Members lose access; the history is kept for retention.': 'Архивировать «{title}»? Участники потеряют доступ; история сохранится согласно политике хранения.',
+  'Select members ({n}). The first selected member becomes the owner.': 'Выберите участников ({n}). Первый выбранный станет владельцем.',
+  'Create group': 'Создать группу',
+  groups: { one: '{n} группа', few: '{n} группы', many: '{n} групп', other: '{n} группы' },
+  announcements: 'объявления',
+  'active {date}': 'активность {date}',
+  'Message retention': 'Хранение сообщений',
+  'Messages (including ones users deleted) and their files are kept for this many days, then permanently purged. Set 0 to keep history forever.':
+    'Сообщения (включая удалённые пользователями) и файлы хранятся указанное число дней, затем удаляются навсегда. 0 — хранить всегда.',
+  days: 'дней',
+  'Retention policy saved': 'Политика хранения сохранена',
+  'The policy runs automatically every 6 hours.': 'Политика применяется автоматически каждые 6 часов.',
+  system: 'система',
+
+  // calls
+  'Ringing…': 'Вызов…',
+  'Incoming call': 'Входящий звонок',
+  'Incoming video call': 'Входящий видеозвонок',
+  Decline: 'Отклонить',
+  Accept: 'Принять',
+  Camera: 'Камера',
+  Unmute_mic: 'Вкл. микрофон',
+  Mute_mic: 'Выкл. микрофон',
+  'Call declined.': 'Звонок отклонён.',
+  'No answer.': 'Нет ответа.',
+  '{name} is on another call.': '{name} разговаривает по другой линии.',
+  'Call failed.': 'Не удалось позвонить.',
+  'Could not access microphone/camera.': 'Нет доступа к микрофону или камере.',
+  'Call connection failed. A TURN server may be required on this network.': 'Не удалось установить соединение. В этой сети может потребоваться TURN-сервер.',
+  'Could not start the camera.': 'Не удалось включить камеру.',
+  'Notifications are not supported in this browser. On iPhone, add the app to the Home Screen first.':
+    'Уведомления не поддерживаются этим браузером. На iPhone сначала добавьте приложение на экран «Домой».',
+  'Notification permission was not granted.': 'Разрешение на уведомления не предоставлено.',
+};
+
+// Labels that need a distinct English rendering from their key.
+const EN_OVERRIDES = { Unmute_mic: 'Unmute', Mute_mic: 'Mute', members: { one: '{n} member', other: '{n} members' },
+  selected: { one: '{n} selected', other: '{n} selected' },
+  groups: { one: '{n} group', other: '{n} groups' },
+  chats: { one: '{n} chat', other: '{n} chats' },
+  'members selected. You will be the group owner.': { one: '{n} member selected. You will be the group owner.', other: '{n} members selected. You will be the group owner.' } };
+
+// Server error codes rendered in the user's language (falls back to the server's English text).
+const ERRORS_RU = {
+  BAD_CREDENTIALS: 'Неверное имя пользователя или пароль.',
+  RATE_LIMITED: 'Слишком много запросов. Подождите немного.',
+  BAD_PASSWORD: 'Текущий пароль указан неверно.',
+  WEAK_PASSWORD: 'Пароль должен содержать не менее 10 символов, буквы и цифры, и отличаться от текущего.',
+  NETWORK: 'Ошибка сети. Проверьте подключение.',
+  FORBIDDEN: 'Недостаточно прав для этого действия.',
+  NOT_FOUND: 'Не найдено.',
+  USERNAME_TAKEN: 'Это имя пользователя уже занято.',
+  TOO_LARGE: 'Файл слишком большой.',
+  PEER_INACTIVE: 'Этот пользователь больше не активен.',
+  TRANSLATION_DISABLED: 'Перевод не настроен на сервере.',
+  TRANSLATION_FAILED: 'Сервис перевода недоступен. Попробуйте позже.',
+};
+
+/** Same EN/RU script heuristic as the server: Cyrillic letters mean Russian. */
+export function detectLangClient(text) {
+  const cyr = (text.match(/[Ѐ-ӿ]/g) || []).length;
+  const lat = (text.match(/[A-Za-z]/g) || []).length;
+  return cyr > lat ? 'ru' : 'en';
+}
+
+export function detectInitialLang() {
+  try {
+    const saved = localStorage.getItem('lang');
+    if (saved === 'en' || saved === 'ru') return saved;
+  } catch { /* ignore */ }
+  return (navigator.language || 'en').toLowerCase().startsWith('ru') ? 'ru' : 'en';
+}
+
+const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
+
+export function translate(lang, key, vars = {}) {
+  let entry = lang === 'ru' ? RU[key] ?? EN_OVERRIDES[key] ?? key : EN_OVERRIDES[key] ?? key;
+  if (entry && typeof entry === 'object') {
+    const cat = new Intl.PluralRules(lang).select(Number(vars.n) || 0);
+    entry = entry[cat] ?? entry.other;
+  }
+  return fill(String(entry), vars);
+}
+
+/** Non-hook access (event handlers, formatters). Components should use useT() so they re-render. */
+export const t = (key, vars) => translate(useStore.getState().lang, key, vars);
+export const useT = () => {
+  const lang = useStore((s) => s.lang);
+  return (key, vars) => translate(lang, key, vars);
+};
+export const locale = () => (useStore.getState().lang === 'ru' ? 'ru-RU' : 'en-US');
+
+export function errorText(err) {
+  if (useStore.getState().lang === 'ru' && err?.code && ERRORS_RU[err.code]) return ERRORS_RU[err.code];
+  return err?.message || String(err);
+}

@@ -1,0 +1,35 @@
+# Nightly logical backup of the Neon database to the private R2 bucket (in addition to Neon's
+# built-in point-in-time restore). Enable by adding these repository secrets:
+#   BACKUP_DATABASE_URL  (Neon *direct* connection string, ideally a read-only role)
+#   R2_ACCOUNT_ID, R2_BACKUP_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+name: Database backup
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    if: ${{ vars.BACKUPS_ENABLED == 'true' }}
+    steps:
+      - name: Install PostgreSQL client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-17
+      - name: Dump and upload
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          FILE="teamchat-$(date -u +%Y%m%d-%H%M%S).dump"
+          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --dbname="$DATABASE_URL" --file="$FILE"
+          aws s3 cp "$FILE" "s3://${{ secrets.R2_BACKUP_BUCKET }}/db-backups/$FILE" \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          echo "Uploaded $FILE"
