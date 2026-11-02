@@ -299,6 +299,7 @@ const RU = {
   'Could not access microphone/camera.': 'Нет доступа к микрофону или камере.',
   'Call connection failed. A TURN server may be required on this network.': 'Не удалось установить соединение. В этой сети может потребоваться TURN-сервер.',
   'Could not start the camera.': 'Не удалось включить камеру.',
+  'Call connection failed. Check your internet connection and try again.': 'Не удалось установить соединение. Проверьте подключение к интернету и попробуйте снова.',
   'Notifications are not supported in this browser. On iPhone, add the app to the Home Screen first.':
     'Уведомления не поддерживаются этим браузером. На iPhone сначала добавьте приложение на экран «Домой».',
   'Notification permission was not granted.': 'Разрешение на уведомления не предоставлено.',

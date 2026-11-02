@@ -48,9 +48,24 @@ async function getMedia(video) {
   });
 }
 
+const CONNECT_TIMEOUT_MS = 25_000;
+let connectTimer = null;
+
+function failConnection(turn) {
+  useStore.getState().showToast(t(turn
+    ? 'Call connection failed. Check your internet connection and try again.'
+    : 'Call connection failed. A TURN server may be required on this network.'), 'error');
+  hangUp();
+}
+
 async function createPeer(callId, stream) {
-  const { iceServers } = await api.get('/calls/ice');
+  const { iceServers, turn } = await api.get('/calls/ice');
   pc = new RTCPeerConnection({ iceServers });
+  // Give up instead of showing "Connecting…" forever when no network path is found.
+  clearTimeout(connectTimer);
+  connectTimer = setTimeout(() => {
+    if (pc && pc.connectionState !== 'connected') failConnection(turn);
+  }, CONNECT_TIMEOUT_MS);
   pendingCandidates = [];
   const remote = new MediaStream();
   useCall.setState({ remoteStream: remote });
@@ -64,17 +79,18 @@ async function createPeer(callId, stream) {
   };
   pc.onconnectionstatechange = () => {
     if (!pc) return;
-    if (pc.connectionState === 'connected') useCall.setState({ status: 'active', startedAt: useCall.getState().startedAt || Date.now() });
-    if (pc.connectionState === 'failed') {
-      useStore.getState().showToast(t('Call connection failed. A TURN server may be required on this network.'), 'error');
-      hangUp();
+    if (pc.connectionState === 'connected') {
+      clearTimeout(connectTimer);
+      useCall.setState({ status: 'active', startedAt: useCall.getState().startedAt || Date.now() });
     }
+    if (pc.connectionState === 'failed') failConnection(turn);
   };
   return pc;
 }
 
 function cleanup() {
   ring(false);
+  clearTimeout(connectTimer);
   const { localStream } = useCall.getState();
   localStream?.getTracks().forEach((t) => t.stop());
   try { pc?.close(); } catch { /* ignore */ }
