@@ -31,8 +31,7 @@ async function loadUser(userId) {
 
 /** Revokes every session and live socket of a user, effective immediately. */
 async function revokeAccess(userId) {
-  await deleteUserSessions(userId);
-  await query('DELETE FROM push_subscriptions WHERE user_id = $1', [userId]);
+  await deleteUserSessions(userId); // also removes their push subscriptions
   disconnectUser(userId);
   broadcast('presence', { userId, online: false, lastSeenAt: new Date().toISOString() });
 }

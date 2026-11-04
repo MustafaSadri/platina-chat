@@ -83,6 +83,10 @@ export async function createSocketServer(httpServer) {
     const typingLimit = rateLimiter(2, 5);
     const receiptLimit = rateLimiter(20, 40);
 
+    // Whether the app is on screen decides if this user needs a push notification.
+    socket.data.visible = socket.handshake.auth?.visible === true;
+    socket.on('visibility', (payload) => { socket.data.visible = payload?.visible === true; });
+
     // Handlers are registered synchronously so events sent right after connecting aren't lost.
     socket.on('typing', safe('typing', async (payload) => {
       const chatId = Number(payload?.chatId);

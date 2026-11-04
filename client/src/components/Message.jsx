@@ -41,7 +41,7 @@ function VoicePlayer({ file, mine }) {
   const toggle = (e) => {
     e.stopPropagation();
     // Only one voice message plays at a time.
-    document.querySelectorAll('audio').forEach((el) => el !== audio.current && !el.closest('.call-overlay, .call-mini') && el.pause());
+    document.querySelectorAll('audio').forEach((el) => el !== audio.current && !el.classList.contains('call-audio') && el.pause());
     if (audio.current.paused) audio.current.play().catch(() => {}); else audio.current.pause();
   };
   const seek = (e) => {

@@ -7,13 +7,18 @@ self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { title: 'TeamChat', body: event.data?.text() }; }
   event.waitUntil((async () => {
-    // Skip if the app is focused; the page shows its own in-app notification.
-    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    if (wins.some((w) => w.focused && w.visibilityState === 'visible')) return;
+    // Always show something: the server already skips devices with the app on screen, and iPhones
+    // cancel the subscription of an app that receives a push without displaying it.
+    if (data.clearCalls) {
+      const shown = await self.registration.getNotifications();
+      shown.filter((n) => n.tag.startsWith('call-')).forEach((n) => n.close());
+    }
+    const tag = data.tag || `teamchat-${Date.now()}`;
     await self.registration.showNotification(data.title || 'TeamChat', {
       body: data.body || '',
-      tag: data.tag,
+      tag,
       renotify: true,
+      requireInteraction: tag.startsWith('call-'),
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       data: { chatId: data.chatId },

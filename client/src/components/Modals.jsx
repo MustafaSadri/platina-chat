@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../lib/api.js';
 import { useStore } from '../lib/store.js';
-import { enableNotifications, notificationsSupported, unsubscribePush } from '../lib/notify.js';
+import { disableNotifications, enableNotifications, isIos, notificationStatus, unsubscribePush } from '../lib/notify.js';
 import { disconnectSocket } from '../lib/socket.js';
 import { locale, useT } from '../lib/i18n.js';
 import Avatar from './Avatar.jsx';
@@ -226,6 +226,57 @@ function Confirm({ modal, close }) {
   );
 }
 
+function NotificationSetting() {
+  const t = useT();
+  const [status, setStatus] = useState('loading');
+  const [busy, setBusy] = useState(false);
+  const toast = (...args) => useStore.getState().showToast(...args);
+  const refresh = () => notificationStatus().catch(() => 'off').then(setStatus);
+  useEffect(() => { refresh(); }, []);
+
+  const on = status === 'on' || status === 'local';
+  const locked = ['loading', 'blocked', 'install', 'unsupported'].includes(status);
+  const label = { on: 'On', local: 'On', off: 'Off', blocked: 'Blocked', install: 'Off', unsupported: 'Not supported', loading: '…' }[status];
+  const help = {
+    on: isIos() ? 'To hear alerts, allow Sounds for this app in iPhone Settings → Notifications.' : null,
+    local: 'Notifications only appear while the app is open.',
+    blocked: isIos() ? 'Notifications are blocked. Turn them on in iPhone Settings → Notifications.' : 'Notifications are blocked. Allow them in your browser’s site settings.',
+    install: 'On iPhone, add this app to your Home Screen and open it from there to turn on notifications.',
+    unsupported: 'This browser does not support notifications.',
+  }[status];
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      if (on) await disableNotifications();
+      else await enableNotifications();
+    } catch (err) { toast(err, 'error'); }
+    await refresh();
+    setBusy(false);
+  }
+
+  async function sendTest() {
+    try {
+      const { sent } = await api.post('/push/test');
+      if (sent) toast(t('Test sent. Leave the app to see it.'));
+      else toast(t('The test could not be delivered. Turn notifications off and on, then try again.'), 'error');
+    } catch (err) { toast(err, 'error'); }
+  }
+
+  return (
+    <>
+      <label className="member-row static wrap">
+        <Icon name="bell" />
+        <span className="grow left">{t('Notifications')}</span>
+        <span className={on ? 'accent small strong' : 'muted small'}>{t(label)}</span>
+        <input type="checkbox" role="switch" className="switch" aria-label={t('Notifications')} checked={on} disabled={locked || busy} onChange={toggle} />
+      </label>
+      {help && <p className="muted small pad">{t(help)}</p>}
+      {status === 'on' && <button className="member-row" onClick={sendTest}><Icon name="bell" /><span className="grow left">{t('Send a test notification')}</span></button>}
+    </>
+  );
+}
+
 function Settings({ close }) {
   const t = useT();
   const me = useStore((s) => s.me);
@@ -233,7 +284,6 @@ function Settings({ close }) {
   const translationEnabled = useStore((s) => s.config.translation);
   const [section, setSection] = useState(null);
   const [sessions, setSessions] = useState([]);
-  const [perm, setPerm] = useState(notificationsSupported() ? Notification.permission : 'unsupported');
 
   useEffect(() => {
     if (section === 'sessions') api.get('/auth/sessions').then((r) => setSessions(r.sessions)).catch(() => {});
@@ -244,14 +294,6 @@ function Settings({ close }) {
     await api.post('/auth/logout').catch(() => {});
     disconnectSocket();
     useStore.setState({ me: null, booted: false, chats: {}, messages: {}, activeChatId: null, modal: null, translations: {} });
-  }
-
-  async function notif() {
-    try {
-      const mode = await enableNotifications();
-      setPerm('granted');
-      useStore.getState().showToast(t(mode === 'push' ? 'Notifications enabled on this device.' : 'Notifications enabled while the app is open.'));
-    } catch (err) { useStore.getState().showToast(err, 'error'); }
   }
 
   if (section === 'password') {
@@ -298,11 +340,7 @@ function Settings({ close }) {
             ))}
           </div>
         </div>
-        <button className="member-row" onClick={notif} disabled={perm === 'unsupported'}>
-          <Icon name="bell" />
-          <span className="grow left">{t('Notifications')}</span>
-          <span className="muted small">{t({ granted: 'Enabled', denied: 'Blocked in browser', default: 'Enable', unsupported: 'Not supported' }[perm])}</span>
-        </button>
+        <NotificationSetting />
         <button className="member-row" onClick={() => setSection('password')}><Icon name="key" /><span className="grow left">{t('Change password')}</span></button>
         <button className="member-row" onClick={() => setSection('sessions')}><Icon name="devices" /><span className="grow left">{t('Active sessions')}</span></button>
         <button className="member-row danger-text" onClick={logout}><Icon name="logout" /><span className="grow left">{t('Sign out')}</span></button>

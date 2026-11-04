@@ -58,6 +58,16 @@ router.post('/chats/:chatId/files', uploadLimiter, asyncH(async (req, res) => {
     }
     const fields = {};
     let handled = false;
+    let sink = null;
+    // Stops a broken upload: without this a dropped connection leaves the request waiting forever.
+    const fail = (err) => {
+      req.unpipe(bb);
+      sink?.destroy(err);
+      reject(err);
+    };
+    req.on('close', () => {
+      if (!req.complete) fail(new HttpError(400, 'The upload was interrupted.', 'UPLOAD_ABORTED'));
+    });
     bb.on('field', (name, val) => { fields[name] = val; });
     bb.on('file', (_name, stream, info) => {
       handled = true;
@@ -67,6 +77,9 @@ router.post('/chats/:chatId/files', uploadLimiter, asyncH(async (req, res) => {
       let size = 0;
       let truncated = false;
       const counter = new PassThrough();
+      sink = counter;
+      counter.on('error', () => {}); // reported through storage.put
+      stream.on('error', fail);
       stream.on('data', (chunk) => { size += chunk.length; });
       stream.on('limit', () => { truncated = true; });
       stream.pipe(counter);
@@ -78,10 +91,13 @@ router.post('/chats/:chatId/files', uploadLimiter, asyncH(async (req, res) => {
             : new HttpError(400, 'File is empty.', 'VALIDATION'));
         }
         resolve({ key, mime, fileName, size, fields });
-      }, reject);
+      }, async (err) => {
+        await storage.remove(key).catch(() => {}); // don't keep a partial file
+        reject(err);
+      });
     });
     bb.on('close', () => { if (!handled) reject(new HttpError(400, 'No file uploaded.', 'VALIDATION')); });
-    bb.on('error', reject);
+    bb.on('error', fail);
     req.pipe(bb);
   });
 

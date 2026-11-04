@@ -5,6 +5,7 @@ import { translateMessage, translateText } from '../services/translate.js';
 import { query } from '../db.js';
 import { asyncH, parse, HttpError } from '../middleware.js';
 import * as chats from '../services/chats.js';
+import { toUsers } from '../realtime/bus.js';
 
 const router = Router();
 const id = z.coerce.number().int().positive();
@@ -74,6 +75,7 @@ router.post('/:id/clear', asyncH(async (req, res) => {
     [chatId, req.user.id],
   );
   await chats.pushChatSummaries(chatId, [req.user.id]);
+  toUsers([req.user.id], 'chat:pins', { chatId });
   res.json({ ok: true });
 }));
 
@@ -135,7 +137,7 @@ router.get('/:id/media', asyncH(async (req, res) => {
   await chats.requireMember(chatId, req.user.id);
   const { rows } = await query(
     `${chats.MESSAGE_SELECT} JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = $2
-      WHERE m.chat_id = $1 AND m.deleted_at IS NULL AND m.id > cm.cleared_before_id AND f.id IS NOT NULL
+      WHERE m.chat_id = $1 AND ${chats.VISIBLE} AND f.id IS NOT NULL
       ORDER BY m.id DESC LIMIT 200`,
     [chatId, req.user.id],
   );

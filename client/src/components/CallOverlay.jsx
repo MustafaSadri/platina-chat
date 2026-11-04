@@ -45,26 +45,32 @@ export default function CallOverlay() {
     active: call.startedAt ? duration((Date.now() - call.startedAt) / 1000) : '',
   }[call.status];
 
+  // The audio element stays mounted in one place: a new element would have no stream and go silent.
+  const audio = <audio ref={remoteAudio} className="call-audio" autoPlay />;
+
   if (minimized) {
     return (
-      <button className="call-mini" onClick={() => setMinimized(false)}>
-        <Icon name="phone" size={18} /> {peer.displayName} · {statusText}
-        <audio ref={remoteAudio} autoPlay />
-      </button>
+      <>
+        {audio}
+        <button className="call-mini" onClick={() => setMinimized(false)}>
+          <Icon name="phone" size={18} /> {peer.displayName} · {statusText}
+        </button>
+      </>
     );
   }
 
   return (
-    <div className={`call-overlay ${call.video ? 'video' : ''}`}>
-      <audio ref={remoteAudio} autoPlay />
-      {call.video && remoteHasVideo && <Video stream={call.remoteStream} muted className="remote-video" />}
+    <>
+    {audio}
+    <div className={`call-overlay ${call.video || remoteHasVideo ? 'video' : ''}`}>
+      {remoteHasVideo && <Video stream={call.remoteStream} muted className="remote-video" />}
       {call.video && call.localStream && !call.camOff && <Video stream={call.localStream} muted className="local-video" />}
       <div className="call-top">
         {call.status !== 'incoming' && (
           <button className="icon-btn light" onClick={() => setMinimized(true)} aria-label="Minimize"><Icon name="back" className="rot-270" /></button>
         )}
       </div>
-      {!(call.video && remoteHasVideo) && (
+      {!remoteHasVideo && (
         <div className="call-center">
           <div className={call.status === 'incoming' || call.status === 'outgoing' ? 'pulse' : ''}>
             <Avatar name={peer.displayName} color={peer.avatarColor} size={120} />
@@ -73,7 +79,7 @@ export default function CallOverlay() {
           <div className="call-status">{statusText}</div>
         </div>
       )}
-      {call.video && remoteHasVideo && <div className="call-caption"><b>{peer.displayName}</b> · {statusText}</div>}
+      {remoteHasVideo && <div className="call-caption"><b>{peer.displayName}</b> · {statusText}</div>}
       <div className="call-controls">
         {call.status === 'incoming' ? (
           <>
@@ -89,5 +95,6 @@ export default function CallOverlay() {
         )}
       </div>
     </div>
+    </>
   );
 }

@@ -31,6 +31,8 @@ export function notifyMessage(m) {
   const viewing = s.activeChatId === m.chatId && document.visibilityState === 'visible' && document.hasFocus();
   if (viewing) return;
   playChime();
+  // With Web Push on, the server notifies hidden devices; showing one here too would double up.
+  if (s.config.vapidPublicKey || turnedOff()) return;
   if (document.visibilityState === 'visible' || !('Notification' in window) || Notification.permission !== 'granted') return;
   const sender = s.users[m.senderId]?.displayName || t('New message');
   const title = chat.type === 'group' ? chat.title : sender;
@@ -50,11 +52,36 @@ function urlBase64ToUint8Array(base64) {
 
 export const notificationsSupported = () => 'Notification' in window && 'serviceWorker' in navigator;
 
+export const isIos = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isInstalled = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+// Remembers an explicit "off" on this device, which would otherwise be undone on the next app start.
+const OFF_KEY = 'notifications-off';
+function turnedOff() {
+  try { return localStorage.getItem(OFF_KEY) === '1'; } catch { return false; }
+}
+function setTurnedOff(off) {
+  try { if (off) localStorage.setItem(OFF_KEY, '1'); else localStorage.removeItem(OFF_KEY); } catch { /* private mode */ }
+}
+
+/** on | local (only while the app is open) | off | blocked | install (iPhone, not on Home Screen) | unsupported */
+export async function notificationStatus() {
+  if (isIos() && !isInstalled()) return 'install';
+  if (!notificationsSupported()) return 'unsupported';
+  if (Notification.permission === 'denied') return 'blocked';
+  if (Notification.permission !== 'granted' || turnedOff()) return 'off';
+  const key = useStore.getState().config.vapidPublicKey;
+  if (!key || !('PushManager' in window)) return 'local';
+  const reg = await navigator.serviceWorker.getRegistration();
+  return (await reg?.pushManager.getSubscription()) ? 'on' : 'off';
+}
+
 /** Asks permission and registers a Web Push subscription when the server has VAPID keys. */
 export async function enableNotifications() {
   if (!notificationsSupported()) throw new Error(t('Notifications are not supported in this browser. On iPhone, add the app to the Home Screen first.'));
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') throw new Error(t('Notification permission was not granted.'));
+  setTurnedOff(false);
   const key = useStore.getState().config.vapidPublicKey;
   if (!key || !('PushManager' in window)) return 'local';
   const reg = await navigator.serviceWorker.ready;
@@ -65,8 +92,13 @@ export async function enableNotifications() {
 }
 
 export async function refreshPushSubscription() {
-  if (!notificationsSupported() || Notification.permission !== 'granted') return;
+  if (!notificationsSupported() || Notification.permission !== 'granted' || turnedOff()) return;
   try { await enableNotifications(); } catch { /* ignore */ }
+}
+
+export async function disableNotifications() {
+  setTurnedOff(true);
+  await unsubscribePush();
 }
 
 export async function unsubscribePush() {

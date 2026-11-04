@@ -170,15 +170,15 @@ export const useStore = create((set, get) => ({
     if (chatId && (!get().messages[chatId] || jumpTo)) get().loadMessages(chatId, { around: jumpTo });
   },
 
-  async loadMessages(chatId, { before = null, around = null } = {}) {
+  async loadMessages(chatId, { before = null, around = null, reset = false } = {}) {
     const q = around ? `around=${around}&limit=${PAGE}` : before ? `before=${before}&limit=${PAGE}` : `limit=${PAGE}`;
     const r = await api.get(`/chats/${chatId}/messages?${q}`);
     set((s) => ({
       messages: {
         ...s.messages,
-        [chatId]: around ? mergeMessages([], r.messages) : mergeMessages(s.messages[chatId], r.messages),
+        [chatId]: around || reset ? mergeMessages([], r.messages) : mergeMessages(s.messages[chatId], r.messages),
       },
-      hasMore: { ...s.hasMore, [chatId]: around ? true : before || !s.messages[chatId] ? r.messages.length >= PAGE : s.hasMore[chatId] },
+      hasMore: { ...s.hasMore, [chatId]: around ? true : before || reset || !s.messages[chatId] ? r.messages.length >= PAGE : s.hasMore[chatId] },
     }));
     r.messages.forEach((m) => get().ensureUser(m.senderId));
     return r.messages;

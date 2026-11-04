@@ -35,6 +35,8 @@ export const config = {
     secretAccessKey: env.S3_SECRET_ACCESS_KEY,
     maxUploadMb: int(env.MAX_UPLOAD_MB, 100),
   },
+  // How long an answered call survives a dropped socket while the client reconnects.
+  callReconnectGraceMs: int(env.CALL_RECONNECT_GRACE_MS, 15_000),
   turn: {
     cloudflareKeyId: env.CLOUDFLARE_TURN_KEY_ID || '',
     cloudflareApiToken: env.CLOUDFLARE_TURN_API_TOKEN || '',

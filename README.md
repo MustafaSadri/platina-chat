@@ -35,6 +35,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and data model.
 - **Translation sends message text to the provider you configure** (DeepL, Google or LibreTranslate).
   It is off until you set `TRANSLATE_PROVIDER`.
 - **Push notifications on iPhone** require iOS 16.4+ and the app added to the Home Screen.
+- **Calls can't ring like a phone call in a web app.** While a call rings, the app sends a notification
+  every 7 seconds. A true full-screen ringing call on iPhone needs a native app (CallKit and VoIP push).
 - Avatars are coloured initials (no profile photo upload).
 
 ---
@@ -70,7 +72,7 @@ For frontend development with hot reload, run `npm run dev` (API on :3000) and `
 ### Tests
 
 ```bash
-npm test                         # 42 API/WebSocket integration tests against a real embedded PostgreSQL
+npm test                         # 56 API/WebSocket integration tests against a real embedded PostgreSQL
 node e2e/smoke.mjs <admin> <password> http://localhost:3000   # browser test (needs Chrome + running server)
 ```
 
@@ -144,12 +146,12 @@ CI (`.github/workflows/ci.yml`) runs the test suite and the build on every push 
 ## 4. Deploy on Render
 
 1. <https://dashboard.render.com> → **New → Blueprint** → connect your GitHub account → choose the repository.
-   Render reads `render.yaml` and creates the `teamchat` web service.
+   Render reads `render.yaml` and creates the `platina-chat` web service.
 2. Render asks for every variable marked `sync: false`. Fill in at least:
 
    | Variable | Value |
    | --- | --- |
-   | `APP_URL` | `https://teamchat.onrender.com` for now (change after adding your domain) |
+   | `APP_URL` | `https://platina-chat.onrender.com` for now (change after adding your domain) |
    | `DATABASE_URL` | Neon pooled string |
    | `DATABASE_URL_UNPOOLED` | Neon direct string |
    | `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | R2 values |
@@ -175,7 +177,7 @@ Sign in with the printed temporary password; you'll be asked to set a new one. T
 ## 5. Custom domain with HTTPS
 
 1. Render → service → **Settings → Custom Domains → Add** `chat.yourcompany.com`.
-2. At your DNS provider add the record Render shows (a `CNAME` to `teamchat.onrender.com`).
+2. At your DNS provider add the record Render shows (a `CNAME` to `platina-chat.onrender.com`).
 3. Render issues and renews the TLS certificate automatically.
 4. Update `APP_URL=https://chat.yourcompany.com` in Render → **Environment** (triggers a redeploy).
 

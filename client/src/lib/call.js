@@ -50,6 +50,17 @@ async function getMedia(video) {
 
 const CONNECT_TIMEOUT_MS = 25_000;
 let connectTimer = null;
+// Bumped whenever a call starts or is torn down, so slow steps (the microphone prompt, network
+// requests) can tell the call they belong to was cancelled while they were waiting.
+let attempt = 0;
+const stopTracks = (stream) => stream?.getTracks().forEach((track) => track.stop());
+
+function clearCallNotifications() {
+  navigator.serviceWorker?.getRegistration()
+    .then((reg) => reg?.getNotifications())
+    .then((list) => list?.filter((n) => n.tag?.startsWith('call-')).forEach((n) => n.close()))
+    .catch(() => {});
+}
 
 function failConnection(turn) {
   useStore.getState().showToast(t(turn
@@ -59,7 +70,9 @@ function failConnection(turn) {
 }
 
 async function createPeer(callId, stream) {
+  const mine = attempt;
   const { iceServers, turn } = await api.get('/calls/ice');
+  if (mine !== attempt) return null;
   pc = new RTCPeerConnection({ iceServers });
   // Give up instead of showing "Connecting…" forever when no network path is found.
   clearTimeout(connectTimer);
@@ -69,7 +82,7 @@ async function createPeer(callId, stream) {
   pendingCandidates = [];
   const remote = new MediaStream();
   useCall.setState({ remoteStream: remote });
-  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+  stream.getTracks().forEach((track) => pc.addTrack(track, stream));
   pc.ontrack = (e) => {
     e.streams[0]?.getTracks().forEach((t) => { if (!remote.getTracks().includes(t)) remote.addTrack(t); });
     useCall.setState({ remoteStream: remote });
@@ -89,6 +102,8 @@ async function createPeer(callId, stream) {
 }
 
 function cleanup() {
+  attempt += 1;
+  clearCallNotifications();
   ring(false);
   clearTimeout(connectTimer);
   const { localStream } = useCall.getState();
@@ -102,17 +117,28 @@ function cleanup() {
 export async function startCall(chat, video) {
   if (useCall.getState().status !== 'idle') return;
   const peer = chat.peer;
+  attempt += 1;
+  const mine = attempt;
   useCall.setState({ ...idle, status: 'outgoing', chatId: chat.id, peer, video });
   let stream;
   try {
     stream = await getMedia(video);
   } catch (err) {
+    if (mine !== attempt) return;
     cleanup();
     useStore.getState().showToast(t('Could not access microphone/camera.'), 'error');
     return;
   }
+  if (mine !== attempt) { // cancelled during the permission prompt
+    stopTracks(stream);
+    return;
+  }
   useCall.setState({ localStream: stream });
   const res = await getSocket()?.timeout(10_000).emitWithAck('call:invite', { chatId: chat.id, video }).catch(() => ({ error: 'Server did not respond.' }));
+  if (mine !== attempt) { // cancelled while the invite was on its way
+    if (res?.callId) getSocket()?.emit('call:end', { callId: res.callId });
+    return;
+  }
   if (!res || res.error) {
     cleanup();
     useStore.getState().showToast(res?.error === 'busy' ? t('{name} is on another call.', { name: peer.displayName }) : res?.error || t('Call failed.'), 'error');
@@ -125,18 +151,25 @@ export async function acceptCall() {
   const st = useCall.getState();
   if (st.status !== 'incoming') return;
   ring(false);
+  clearCallNotifications();
+  const mine = attempt;
   useCall.setState({ status: 'connecting' });
   let stream;
   try {
     stream = await getMedia(st.video);
   } catch (err) {
+    if (mine !== attempt) return;
     getSocket()?.emit('call:reject', { callId: st.callId });
     cleanup();
     useStore.getState().showToast(t('Could not access microphone/camera.'), 'error');
     return;
   }
+  if (mine !== attempt) { // the call ended during the permission prompt
+    stopTracks(stream);
+    return;
+  }
   useCall.setState({ localStream: stream });
-  await createPeer(st.callId, stream);
+  if (!(await createPeer(st.callId, stream))) return;
   const res = await getSocket()?.emitWithAck('call:accept', { callId: st.callId });
   if (res?.error) {
     cleanup();
@@ -163,9 +196,9 @@ export function toggleMic() {
 }
 
 export async function toggleCam() {
-  const { localStream, camOff, video, callId } = useCall.getState();
-  if (!video) {
-    // Upgrade an audio call to video by adding a camera track (renegotiates).
+  const { localStream, camOff, callId } = useCall.getState();
+  if (!localStream?.getVideoTracks().length) {
+    // No camera in this call yet: add one (renegotiates). The other side can do the same.
     try {
       const cam = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       const track = cam.getVideoTracks()[0];
@@ -201,13 +234,28 @@ async function onSignal({ callId, data }) {
   }
 }
 
+/** After the socket reconnects: reattach to the running call, or close it if it's over. */
+export async function rejoinCall() {
+  const { callId, status } = useCall.getState();
+  if (!callId || status === 'incoming') return;
+  const res = await getSocket()?.timeout(5000).emitWithAck('call:rejoin', { callId }).catch(() => null);
+  if (res?.error) cleanup();
+}
+
+// Closing the app ends the call at once; the reconnect grace period is only for dropped connections.
+window.addEventListener('pagehide', (e) => {
+  const { callId, status } = useCall.getState();
+  if (!e.persisted && callId && status !== 'incoming') hangUp();
+});
+
 export async function handleCallEvent(event, data) {
   const st = useCall.getState();
   if (event === 'call:incoming') {
-    if (st.status !== 'idle') return; // server marks us busy; ignore duplicates
+    if (st.status !== 'idle') return; // already on this or another call; ignore repeats
     useCall.setState({ ...idle, status: 'incoming', callId: data.callId, chatId: data.chatId, peer: data.from, video: data.video });
     ring(true);
-    if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted') {
+    // With Web Push the server notifies hidden devices; this covers servers without it.
+    if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted' && !useStore.getState().config.vapidPublicKey) {
       navigator.serviceWorker?.getRegistration().then((reg) => reg?.showNotification(data.from.displayName, {
         body: data.video ? `📹 ${t('Incoming video call')}` : `📞 ${t('Incoming call')}`, tag: `call-${data.callId}`, data: { chatId: data.chatId },
       }));
@@ -215,7 +263,7 @@ export async function handleCallEvent(event, data) {
   } else if (event === 'call:accepted') {
     if (data.callId !== st.callId || st.status !== 'outgoing') return;
     useCall.setState({ status: 'connecting' });
-    await createPeer(st.callId, st.localStream);
+    if (!(await createPeer(st.callId, st.localStream))) return;
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     getSocket()?.emit('call:signal', { callId: st.callId, data: { sdp: pc.localDescription.toJSON() } });

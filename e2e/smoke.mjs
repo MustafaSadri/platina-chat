@@ -171,12 +171,45 @@ try {
   await emp.waitForFunction(() => /^\d+:\d\d$/.test(document.querySelector('.call-status')?.textContent || ''), { timeout: 20_000 });
   await sleep(2500);
   const audioFlowing = await admin.evaluate(() => {
-    const a = document.querySelector('.call-overlay audio');
+    const a = document.querySelector('audio.call-audio');
     return !!a?.srcObject && a.srcObject.getAudioTracks().length > 0;
   });
   if (!audioFlowing) throw new Error('remote audio track missing');
   await admin.screenshot({ path: `${shots}/08-desktop-active-call.png` });
   step('WebRTC call connected with remote audio track');
+
+  // Minimizing and restoring must not silence the call.
+  const audioAttached = () => admin.evaluate(() => {
+    const a = document.querySelector('audio.call-audio');
+    return !!a?.srcObject && a.srcObject.getAudioTracks().length > 0 && !a.paused;
+  });
+  await admin.click('.call-overlay [aria-label="Minimize"]');
+  await admin.waitForSelector('.call-mini');
+  if (!(await audioAttached())) throw new Error('remote audio lost when the call was minimized');
+  await admin.click('.call-mini');
+  await admin.waitForSelector('.call-overlay');
+  if (!(await audioAttached())) throw new Error('remote audio lost when the call was restored');
+  step('call audio survives minimize and restore');
+
+  // Turning the camera on during an audio call shows up on the other side.
+  await admin.click('.call-overlay [aria-label="Camera"]');
+  await emp.waitForSelector('.remote-video', { timeout: 10_000 });
+  await emp.bringToFront();
+  const videoLive = () => emp.waitForFunction(() => {
+    const track = document.querySelector('.remote-video')?.srcObject?.getVideoTracks()[0];
+    return track?.readyState === 'live' && !track.muted;
+  }, { timeout: 10_000, polling: 250 }).then(() => true, () => false);
+  if (await videoLive()) {
+    step('camera turned on mid-call reaches the other person');
+  } else {
+    // Headless Chrome's fake camera sometimes stops by itself, even on a blank page with no app code.
+    const cameraDied = await admin.$eval('.local-video', (v) => v.srcObject.getVideoTracks()[0].readyState === 'ended').catch(() => false);
+    if (!cameraDied) throw new Error('no video frames from the other person');
+    console.log('⚠ Chrome stopped its fake camera, so video frames could not be checked on this run');
+  }
+  await emp.click('.call-overlay [aria-label="Camera"]');
+  await admin.waitForSelector('.remote-video', { timeout: 10_000 });
+  step('the other person can turn their camera on too');
   await admin.click('.call-overlay [aria-label="End call"]');
   await emp.waitForFunction(() => !document.querySelector('.call-overlay'), { timeout: 10_000 });
   await admin.waitForFunction(() => [...document.querySelectorAll('.call-msg')].length > 0, { timeout: 10_000 });
@@ -206,6 +239,7 @@ try {
   if (translation) {
     await emp.click('.chat-list .chat-item');
     await emp.waitForSelector('.bubble.in');
+    await sleep(800); // let the chat finish sliding in and scrolling, or the press misses the bubble
     // Translate an incoming English message via the long-press menu.
     const inBubble = await emp.$('.msg-row:not(.mine) .bubble');
     const b = await inBubble.boundingBox();
@@ -234,6 +268,29 @@ try {
     step('draft translated EN→RU before sending');
     await emp.click('.chat-header .back-btn');
   }
+
+  // ---------------------------------------------------------------- notifications switch
+  await admin.click('.sidebar-header .icon-btn');
+  await clickText(admin, 'Settings', '.drawer-item');
+  await admin.waitForSelector('.switch[role="switch"]');
+  const notificationState = () => admin.$eval('.switch[role="switch"]', (el) => ({ checked: el.checked, label: el.previousElementSibling.textContent }));
+  const waitForState = (checked) => admin.waitForFunction((want) => {
+    const el = document.querySelector('.switch[role="switch"]');
+    return el.checked === want && !el.disabled && el.previousElementSibling.textContent === (want ? 'On' : 'Off');
+  }, { timeout: 5000 }, checked);
+  const startedOn = (await notificationState()).checked;
+  await admin.screenshot({ path: `${shots}/13-desktop-notification-setting.png` });
+  await admin.click('.switch[role="switch"]');
+  await waitForState(!startedOn);
+  await admin.click('.switch[role="switch"]');
+  await waitForState(startedOn);
+  await admin.reload({ waitUntil: 'networkidle0' });
+  await admin.click('.sidebar-header .icon-btn');
+  await clickText(admin, 'Settings', '.drawer-item');
+  await admin.waitForSelector('.switch[role="switch"]');
+  await waitForState(startedOn);
+  await admin.click('.modal-header .icon-btn');
+  step('notification switch shows On/Off, toggles, and survives a reload');
 
   // ---------------------------------------------------------------- deactivation kicks the user out
   await admin.click('.sidebar-header .icon-btn');

@@ -188,7 +188,7 @@ export default function Sidebar() {
       { icon: chat.muted ? 'bell' : 'bellOff', label: t(chat.muted ? 'Unmute' : 'Mute'), onClick: () => setSetting(chat, { muted: !chat.muted }) },
       { icon: 'archive', label: t(chat.archived ? 'Unarchive' : 'Archive'), onClick: () => setSetting(chat, { archived: !chat.archived }, t(chat.archived ? 'Chat unarchived' : 'Chat archived')) },
       { icon: 'check', label: t('Mark as read'), onClick: () => useStore.getState().markRead(chat.id) },
-      { icon: 'trash', label: t('Clear history (for me)'), danger: true, onClick: () => open({ type: 'confirm', title: t('Clear history'), text: t('Clear the history of “{title}” for you? Other members keep their copy.', { title: chat.title }), confirm: t('Clear'), danger: true, onConfirm: () => api.post(`/chats/${chat.id}/clear`).then(() => useStore.getState().loadMessages(chat.id)) }) },
+      { icon: 'trash', label: t('Clear history (for me)'), danger: true, onClick: () => open({ type: 'confirm', title: t('Clear history'), text: t('Clear the history of “{title}” for you? Other members keep their copy.', { title: chat.title }), confirm: t('Clear'), danger: true, onConfirm: () => api.post(`/chats/${chat.id}/clear`).then(() => useStore.getState().loadMessages(chat.id, { reset: true })) }) },
       chat.type === 'group' && { icon: 'logout', label: t('Leave group'), danger: true, onClick: () => open({ type: 'confirm', title: t('Leave group'), text: t('Leave “{title}”?', { title: chat.title }), confirm: t('Leave'), danger: true, onConfirm: () => api.del(`/chats/${chat.id}/members/${me.id}`) }) },
     ].filter(Boolean));
   }

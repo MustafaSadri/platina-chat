@@ -121,7 +121,7 @@ export async function getChatSummaries(userId, chatIds = null) {
             (SELECT coalesce(max(o.last_delivered_id), 0) FROM chat_members o WHERE o.chat_id = c.id AND o.user_id <> $1) AS others_delivered_id,
             (SELECT count(*)::int FROM messages x
               WHERE x.chat_id = c.id AND x.id > greatest(cm.last_read_id, cm.cleared_before_id)
-                AND x.deleted_at IS NULL AND x.sender_id IS DISTINCT FROM $1) AS unread,
+                AND x.deleted_at IS NULL AND x.type <> 'system' AND x.sender_id IS DISTINCT FROM $1) AS unread,
             (SELECT count(*)::int FROM chat_members o JOIN users ou ON ou.id = o.user_id
               WHERE o.chat_id = c.id AND ou.status <> 'removed') AS member_count,
             lm.id AS last_message_id,
@@ -376,7 +376,7 @@ export async function setMemberRole(chatId, actor, userId, role) {
 // Messages
 // ---------------------------------------------------------------------------
 
-const VISIBLE = `m.deleted_at IS NULL AND m.id > cm.cleared_before_id
+export const VISIBLE = `m.deleted_at IS NULL AND m.id > cm.cleared_before_id
   AND NOT EXISTS (SELECT 1 FROM message_hidden h WHERE h.message_id = m.id AND h.user_id = cm.user_id)`;
 
 export async function listMessages(chatId, userId, { before, after, around, limit = 50 }) {
@@ -462,6 +462,18 @@ export async function sendMessage(user, chatId, { body = '', fileId = null, repl
   return { message, duplicate: false };
 }
 
+/** Keeps the text copied into "X pinned ..." notices in step with the message (null removes it). */
+async function syncPinNotices(chatId, messageId, preview) {
+  const { rows } = await query(
+    `UPDATE messages
+        SET meta = CASE WHEN $3::text IS NULL THEN meta - 'preview' ELSE jsonb_set(meta, '{preview}', to_jsonb($3::text)) END
+      WHERE chat_id = $1 AND type = 'system' AND meta->>'event' = 'message_pinned' AND meta->>'messageId' = $2
+      RETURNING id`,
+    [chatId, String(messageId), preview],
+  );
+  for (const { id } of rows) await toChat(chatId, 'message:updated', await getMessage(id));
+}
+
 export async function editMessage(user, messageId, body) {
   const m = await assertVisibleMessage(messageId, user.id);
   if (m.sender_id !== user.id) throw new HttpError(403, 'You can only edit your own messages.', 'FORBIDDEN');
@@ -469,6 +481,7 @@ export async function editMessage(user, messageId, body) {
   if (m.type === 'text' && !body.trim()) throw new HttpError(400, 'Message is empty.', 'VALIDATION');
   await query('UPDATE messages SET body = $2, edited_at = now() WHERE id = $1', [messageId, body]);
   await query('DELETE FROM message_translations WHERE message_id = $1', [messageId]);
+  await syncPinNotices(m.chat_id, messageId, body.slice(0, 80));
   const message = await getMessage(messageId);
   await toChat(m.chat_id, 'message:updated', message);
   return message;
@@ -479,6 +492,7 @@ export async function deleteMessage(user, messageId, forEveryone) {
   if (!forEveryone) {
     await query('INSERT INTO message_hidden (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [messageId, user.id]);
     toUsers([user.id], 'message:deleted', { chatId: m.chat_id, messageId });
+    toUsers([user.id], 'chat:pins', { chatId: m.chat_id });
     return;
   }
   const canModerate = m.chat_type === 'group' && ['owner', 'admin'].includes(m.my_role);
@@ -486,6 +500,7 @@ export async function deleteMessage(user, messageId, forEveryone) {
   if (m.type === 'system') throw new HttpError(400, 'System messages cannot be deleted.', 'VALIDATION');
   await query('UPDATE messages SET deleted_at = now(), deleted_by = $2 WHERE id = $1', [messageId, user.id]);
   await query('DELETE FROM pinned_messages WHERE message_id = $1', [messageId]);
+  await syncPinNotices(m.chat_id, messageId, null);
   await toChat(m.chat_id, 'message:deleted', { chatId: m.chat_id, messageId });
 }
 
@@ -559,8 +574,9 @@ export async function listPins(chatId, userId) {
   await requireMember(chatId, userId);
   const { rows } = await query(
     `${MESSAGE_SELECT} JOIN pinned_messages p ON p.message_id = m.id
-      WHERE p.chat_id = $1 AND m.deleted_at IS NULL ORDER BY p.pinned_at DESC`,
-    [chatId],
+       JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = $2
+      WHERE p.chat_id = $1 AND ${VISIBLE} ORDER BY p.pinned_at DESC`,
+    [chatId, userId],
   );
   return rows.map(serializeMessage);
 }

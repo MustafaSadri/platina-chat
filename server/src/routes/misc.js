@@ -6,7 +6,7 @@ import { asyncH, parse } from '../middleware.js';
 import { publicUser } from '../services/auth.js';
 import { searchMessages } from '../services/chats.js';
 import { getIceServers, turnConfigured } from '../services/ice.js';
-import { pushEnabled } from '../services/push.js';
+import { pushEnabled, sendToUser } from '../services/push.js';
 import { translationEnabled } from '../services/translate.js';
 import { onlineUserIds } from '../realtime/bus.js';
 
@@ -62,11 +62,18 @@ const subSchema = z.object({
 router.post('/push/subscribe', asyncH(async (req, res) => {
   const sub = parse(subSchema, req.body);
   await query(
-    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
-    [req.user.id, sub.endpoint, sub.keys.p256dh, sub.keys.auth],
+    `INSERT INTO push_subscriptions (user_id, session_id, endpoint, p256dh, auth) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, session_id = EXCLUDED.session_id,
+       p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
+    [req.user.id, req.user.session_id, sub.endpoint, sub.keys.p256dh, sub.keys.auth],
   );
   res.json({ ok: true });
+}));
+
+/** Lets people confirm from Settings that notifications really reach their devices. */
+router.post('/push/test', asyncH(async (req, res) => {
+  const body = req.user.language === 'ru' ? 'Уведомления работают.' : 'Notifications are working.';
+  res.json(await sendToUser(req.user.id, { title: 'TeamChat', body, tag: `test-${Date.now()}` }));
 }));
 
 router.post('/push/unsubscribe', asyncH(async (req, res) => {

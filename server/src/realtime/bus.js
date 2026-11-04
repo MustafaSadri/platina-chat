@@ -35,9 +35,13 @@ export function disconnectSession(sessionId) {
   io?.in(sessionRoom(sessionId)).disconnectSockets(true);
 }
 
-export async function isOnline(userId) {
+/**
+ * True when the user has the app on screen. A connected socket is not enough: phones keep sockets
+ * alive for a while after the app goes to the background, and those users still need a push.
+ */
+export async function isForeground(userId) {
   if (!io) return false;
-  return (await io.in(userRoom(userId)).fetchSockets()).length > 0;
+  return (await io.in(userRoom(userId)).fetchSockets()).some((s) => s.data.visible);
 }
 
 export async function onlineUserIds() {

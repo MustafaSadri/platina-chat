@@ -2,6 +2,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
@@ -19,6 +20,7 @@ process.env.MAX_UPLOAD_MB = '1';
 process.env.LOGIN_RATE_LIMIT = '1000';
 process.env.NODE_ENV = 'test';
 process.env.TRANSLATE_PROVIDER = 'test';
+process.env.CALL_RECONNECT_GRACE_MS = '400';
 
 let base;
 let httpServer;
@@ -528,6 +530,193 @@ describe('calls (signaling)', () => {
   test('ICE configuration endpoint', async () => {
     const r = await alice.get('/api/calls/ice');
     assert.ok(r.body.iceServers.length >= 1);
+  });
+
+  async function answeredCall() {
+    const dm = (await alice.post('/api/chats/direct', { userId: bob.id })).body.chat.id;
+    const a = await alice.socket();
+    const b = await bob.socket();
+    const incoming = waitFor(b, 'call:incoming');
+    const { callId } = await a.emitWithAck('call:invite', { chatId: dm, video: false });
+    await incoming;
+    await b.emitWithAck('call:accept', { callId });
+    return { a, b, callId };
+  }
+
+  test('a dropped socket can rejoin an answered call', async () => {
+    const { a, b, callId } = await answeredCall();
+    let ended = false;
+    a.on('call:ended', () => { ended = true; });
+    b.close();
+    await new Promise((r) => setTimeout(r, 100));
+    const b2 = await bob.socket();
+    assert.deepEqual(await b2.emitWithAck('call:rejoin', { callId }), { ok: true });
+    await new Promise((r) => setTimeout(r, 500)); // past the grace period
+    assert.equal(ended, false);
+
+    const sig = waitFor(b2, 'call:signal');
+    a.emit('call:signal', { callId, data: { candidate: 'relay-after-rejoin' } });
+    assert.deepEqual((await sig).data, { candidate: 'relay-after-rejoin' });
+
+    const log = waitFor(a, 'message:new', (m) => m.type === 'call');
+    a.emit('call:end', { callId });
+    assert.equal((await log).meta.status, 'completed');
+  });
+
+  test('an answered call ends after the grace period if nobody returns', async () => {
+    const { a, b, callId } = await answeredCall();
+    const ended = waitFor(a, 'call:ended');
+    b.close();
+    assert.equal((await ended).reason, 'disconnected');
+    assert.ok((await bob.socket().then((s) => s.emitWithAck('call:rejoin', { callId }))).error);
+  });
+
+  test('opening the app while a call rings still shows the incoming call', async () => {
+    const dm = (await alice.post('/api/chats/direct', { userId: bob.id })).body.chat.id;
+    const a = await alice.socket();
+    const { callId } = await a.emitWithAck('call:invite', { chatId: dm, video: false });
+    const s = ioClient(base, { extraHeaders: { cookie: bob.cookie }, transports: ['websocket'], reconnection: false, autoConnect: false });
+    sockets.push(s);
+    const incoming = waitFor(s, 'call:incoming', (c) => c.callId === callId);
+    s.connect();
+    assert.equal((await incoming).from.id, alice.id);
+    const ended = waitFor(a, 'call:ended');
+    a.emit('call:end', { callId });
+    await ended;
+  });
+
+  test('push decisions follow whether the app is on screen, not just connected', async () => {
+    const { isForeground } = await import('../src/realtime/bus.js');
+    const nina = await makeEmployee(admin, 'nina');
+    const s = await nina.socket();
+    assert.equal(await isForeground(nina.id), false);
+    s.emit('visibility', { visible: true });
+    await s.emitWithAck('call:rejoin', {}); // round trip so the event above has been handled
+    assert.equal(await isForeground(nina.id), true);
+    s.emit('visibility', { visible: false });
+    await s.emitWithAck('call:rejoin', {});
+    assert.equal(await isForeground(nina.id), false);
+  });
+
+  test('only a party to the call can rejoin it', async () => {
+    const { a, callId } = await answeredCall();
+    const c = await carol.socket();
+    assert.ok((await c.emitWithAck('call:rejoin', { callId })).error);
+    const ended = waitFor(a, 'call:ended');
+    a.emit('call:end', { callId });
+    await ended;
+  });
+});
+
+describe('push subscriptions follow the session', () => {
+  const subscribe = (client, endpoint) => client.post('/api/push/subscribe', { endpoint, keys: { p256dh: 'key', auth: 'auth' } });
+  const subCount = async (endpoint) => (await pool.query('SELECT 1 FROM push_subscriptions WHERE endpoint = $1', [endpoint])).rowCount;
+  const currentSession = async (client) => (await client.get('/api/auth/sessions')).body.sessions.find((s) => s.current).id;
+
+  test('ending a session stops pushes to that device', async () => {
+    const phone = await login('bob', bob.password);
+    assert.equal((await subscribe(phone, 'https://push.example/ended')).status, 200);
+    assert.equal(await subCount('https://push.example/ended'), 1);
+    await bob.del(`/api/auth/sessions/${await currentSession(phone)}`);
+    assert.equal(await subCount('https://push.example/ended'), 0);
+  });
+
+  test('signing out stops pushes to that device', async () => {
+    const phone = await login('bob', bob.password);
+    await subscribe(phone, 'https://push.example/logout');
+    await phone.post('/api/auth/logout');
+    assert.equal(await subCount('https://push.example/logout'), 0);
+  });
+
+  test('changing a password stops pushes to other devices only', async () => {
+    const paula = await makeEmployee(admin, 'paula');
+    const phone = await login('paula', paula.password);
+    await subscribe(paula, 'https://push.example/this-device');
+    await subscribe(phone, 'https://push.example/other-device');
+    const r = await paula.post('/api/auth/change-password', { currentPassword: paula.password, newPassword: 'paula-NewSecret456' });
+    assert.equal(r.status, 200);
+    assert.equal(await subCount('https://push.example/this-device'), 1);
+    assert.equal(await subCount('https://push.example/other-device'), 0);
+  });
+
+  test('an admin password reset stops pushes', async () => {
+    const quinn = await makeEmployee(admin, 'quinn');
+    await subscribe(quinn, 'https://push.example/reset');
+    await admin.post(`/api/admin/users/${quinn.id}/reset-password`);
+    assert.equal(await subCount('https://push.example/reset'), 0);
+  });
+});
+
+describe('message visibility', () => {
+  let g;
+  const pinNotice = async (client, messageId) => (await client.get(`/api/chats/${g}/messages?limit=100`)).body.messages
+    .find((m) => m.meta?.event === 'message_pinned' && m.meta.messageId === messageId);
+
+  before(async () => {
+    g = (await alice.post('/api/chats/group', { title: 'Visibility', memberIds: [bob.id] })).body.chat.id;
+  });
+
+  test('deleting a pinned message removes its text from the pin notice', async () => {
+    const m = (await alice.post(`/api/chats/${g}/messages`, { body: 'the secret code is 1234' })).body.message;
+    await alice.post(`/api/messages/${m.id}/pin`);
+    assert.equal((await pinNotice(bob, m.id)).meta.preview, 'the secret code is 1234');
+    const s = await bob.socket();
+    const updated = waitFor(s, 'message:updated', (u) => u.meta?.messageId === m.id);
+    await alice.del(`/api/messages/${m.id}?forEveryone=1`);
+    assert.equal((await updated).meta.preview, undefined);
+    assert.equal((await pinNotice(bob, m.id)).meta.preview, undefined);
+  });
+
+  test('editing a pinned message updates the pin notice', async () => {
+    const m = (await alice.post(`/api/chats/${g}/messages`, { body: 'typo here' })).body.message;
+    await alice.post(`/api/messages/${m.id}/pin`);
+    await alice.patch(`/api/messages/${m.id}`, { body: 'fixed text' });
+    assert.equal((await pinNotice(bob, m.id)).meta.preview, 'fixed text');
+  });
+
+  test('system messages do not count as unread', async () => {
+    const fresh = (await alice.post('/api/chats/group', { title: 'Quiet', memberIds: [bob.id] })).body.chat.id;
+    const summary = (await bob.get('/api/chats')).body.chats.find((c) => c.id === fresh);
+    assert.equal(summary.unread, 0);
+  });
+
+  test('clear history and delete-for-me also apply to pins and media', async () => {
+    const pinned = (await alice.post(`/api/chats/${g}/messages`, { body: 'pinned note' })).body.message;
+    await alice.post(`/api/messages/${pinned.id}/pin`);
+    const fd = new FormData();
+    fd.append('file', new Blob(['data'], { type: 'application/zip' }), 'a.zip');
+    const up = await alice.req('POST', `/api/chats/${g}/files`, fd);
+    const file = (await alice.post(`/api/chats/${g}/messages`, { fileId: up.body.file.id })).body.message;
+
+    await bob.del(`/api/messages/${file.id}`);
+    assert.ok(!(await bob.get(`/api/chats/${g}/media`)).body.messages.some((m) => m.id === file.id));
+    assert.ok((await alice.get(`/api/chats/${g}/media`)).body.messages.some((m) => m.id === file.id));
+
+    await bob.post(`/api/chats/${g}/clear`);
+    assert.equal((await bob.get(`/api/chats/${g}/pins`)).body.messages.length, 0);
+    assert.ok((await alice.get(`/api/chats/${g}/pins`)).body.messages.some((m) => m.id === pinned.id));
+  });
+});
+
+describe('interrupted uploads', () => {
+  const listFiles = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()) : []);
+
+  test('a dropped connection cleans up the partial file', async () => {
+    const g = (await alice.post('/api/chats/group', { title: 'Uploads', memberIds: [] })).body.chat.id;
+    const dir = path.join(uploadsDir, 'chats', String(g));
+    const { port } = new URL(base);
+    const req = http.request({
+      port, host: '127.0.0.1', method: 'POST', path: `/api/chats/${g}/files`,
+      headers: { cookie: alice.cookie, 'content-type': 'multipart/form-data; boundary=cut', 'content-length': 500_000 },
+    });
+    req.on('error', () => {});
+    req.write(`--cut\r\nContent-Disposition: form-data; name="file"; filename="cut.zip"\r\nContent-Type: application/zip\r\n\r\n${'a'.repeat(5000)}`);
+    for (let i = 0; i < 40 && !listFiles(dir).length; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(listFiles(dir).length, 1, 'the partial upload should be on disk while it is in progress');
+
+    req.destroy();
+    for (let i = 0; i < 40 && listFiles(dir).length; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(listFiles(dir).length, 0);
   });
 });
 

@@ -1,21 +1,35 @@
 import { io } from 'socket.io-client';
 import { useStore } from './store.js';
 import { notifyMessage } from './notify.js';
-import { handleCallEvent } from './call.js';
+import { handleCallEvent, rejoinCall } from './call.js';
 
 let socket = null;
 
 export const getSocket = () => socket;
 
+// The server only sends a push when the app isn't on screen, so it has to know which is the case.
+const isVisible = () => document.visibilityState === 'visible';
+document.addEventListener('visibilitychange', () => {
+  if (socket?.connected) socket.emit('visibility', { visible: isVisible() });
+});
+
 export function connectSocket() {
   if (socket) return socket;
-  socket = io({ transports: ['websocket', 'polling'], withCredentials: true, reconnectionDelayMax: 10_000 });
+  socket = io({
+    transports: ['websocket', 'polling'],
+    withCredentials: true,
+    reconnectionDelayMax: 10_000,
+    auth: (send) => send({ visible: isVisible() }),
+  });
   const s = useStore.getState;
   let firstConnect = true;
 
   socket.on('connect', () => {
     useStore.setState({ connected: true });
-    if (!firstConnect) s().resync().catch(() => {});
+    if (!firstConnect) {
+      s().resync().catch(() => {});
+      rejoinCall();
+    }
     firstConnect = false;
   });
   socket.on('disconnect', () => useStore.setState({ connected: false }));

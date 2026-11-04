@@ -1,16 +1,20 @@
 import crypto from 'node:crypto';
+import { config } from '../config.js';
 import { query } from '../db.js';
-import { userRoom } from './bus.js';
+import { isForeground, toChat, userRoom } from './bus.js';
 import { getMessage } from '../services/chats.js';
-import { toChat } from './bus.js';
 import { sendToUser } from '../services/push.js';
 
 // Active 1:1 calls. State is per server instance (see docs/ARCHITECTURE.md for scaling notes).
 const calls = new Map();
 const RING_TIMEOUT_MS = 45_000;
+// A web app can't ring like a phone call, so while ringing we repeat the notification instead.
+const PUSH_RING_INTERVAL_MS = 7_000;
+const PUSH_RING_COUNT = 6;
 
 async function recordCall(call, status) {
-  const durationSec = call.answeredAt ? Math.round((Date.now() - call.answeredAt) / 1000) : 0;
+  const endedAt = call.droppedAt || Date.now();
+  const durationSec = call.answeredAt ? Math.round((endedAt - call.answeredAt) / 1000) : 0;
   const { rows } = await query(
     `INSERT INTO messages (chat_id, sender_id, type, body, meta) VALUES ($1, $2, 'call', '', $3) RETURNING id`,
     [call.chatId, call.callerId, { video: call.video, status, durationSec }],
@@ -19,11 +23,48 @@ async function recordCall(call, status) {
   await toChat(call.chatId, 'message:new', msg);
 }
 
+const logPushError = (err) => console.error('[calls] push failed', err.message);
+
+function ringDevices(call) {
+  let count = 0;
+  const send = async () => {
+    count += 1;
+    if (!calls.has(call.callId) || call.answeredAt || count > PUSH_RING_COUNT) {
+      clearInterval(call.pushTimer);
+      return;
+    }
+    if (await isForeground(call.calleeId)) return;
+    await sendToUser(call.calleeId, {
+      title: call.from.displayName,
+      body: call.video ? '📹 Incoming video call' : '📞 Incoming call',
+      chatId: call.chatId,
+      tag: `call-${call.callId}-${count}`, // a new tag each time, so every repeat alerts
+    }, { ttl: 30 });
+  };
+  send().catch(logPushError);
+  call.pushTimer = setInterval(() => send().catch(logPushError), PUSH_RING_INTERVAL_MS);
+  call.pushTimer.unref?.();
+}
+
+async function notifyMissed(call) {
+  if (await isForeground(call.calleeId)) return;
+  await sendToUser(call.calleeId, {
+    title: call.from.displayName,
+    body: call.video ? '📹 Missed video call' : '📞 Missed call',
+    chatId: call.chatId,
+    tag: `missed-${call.callId}`,
+    clearCalls: true,
+  });
+}
+
 function finish(io, callId, status, reason) {
   const call = calls.get(callId);
   if (!call) return;
   calls.delete(callId);
   clearTimeout(call.timer);
+  clearTimeout(call.graceTimer);
+  clearInterval(call.pushTimer);
+  if (status === 'missed' || status === 'cancelled') notifyMissed(call).catch(logPushError);
   const payload = { callId, reason };
   io.to([userRoom(call.callerId), userRoom(call.calleeId)]).emit('call:ended', payload);
   recordCall(call, status).catch((err) => console.error('[calls] record failed', err.message));
@@ -33,6 +74,13 @@ const isParty = (call, userId) => call && (call.callerId === userId || call.call
 
 export function registerCallHandlers(io, socket, limit) {
   const { userId } = socket.data;
+
+  // Someone opening the app from a call notification has missed the original event.
+  for (const call of calls.values()) {
+    if (call.calleeId === userId && !call.answeredAt) {
+      socket.emit('call:incoming', { callId: call.callId, chatId: call.chatId, video: call.video, from: call.from });
+    }
+  }
 
   socket.on('call:invite', async (payload, ack = () => {}) => {
     try {
@@ -56,18 +104,12 @@ export function registerCallHandlers(io, socket, limit) {
       const call = {
         callId, chatId, video, callerId: userId, calleeId: peer.peer_id,
         callerSocket: socket.id, calleeSocket: null, answeredAt: null,
+        from: socket.data.user, dropped: new Set(), droppedAt: null,
       };
       calls.set(callId, call);
       call.timer = setTimeout(() => finish(io, callId, 'missed', 'no-answer'), RING_TIMEOUT_MS);
-      const online = (await io.in(userRoom(peer.peer_id)).fetchSockets()).length > 0;
       io.to(userRoom(peer.peer_id)).emit('call:incoming', { callId, chatId, video, from: socket.data.user });
-      if (!online) {
-        sendToUser(peer.peer_id, {
-          title: socket.data.user.displayName,
-          body: video ? '📹 Incoming video call' : '📞 Incoming call',
-          chatId, tag: `call-${callId}`,
-        }).catch(() => {});
-      }
+      ringDevices(call);
       ack({ callId });
     } catch (err) {
       console.error('[calls] invite', err);
@@ -81,6 +123,7 @@ export function registerCallHandlers(io, socket, limit) {
     call.answeredAt = Date.now();
     call.calleeSocket = socket.id;
     clearTimeout(call.timer);
+    clearInterval(call.pushTimer);
     io.to(call.callerSocket).emit('call:accepted', { callId: call.callId });
     // Stop ringing on the callee's other devices.
     socket.to(userRoom(userId)).emit('call:ended', { callId: call.callId, reason: 'answered-elsewhere' });
@@ -98,6 +141,21 @@ export function registerCallHandlers(io, socket, limit) {
     finish(io, call.callId, call.answeredAt ? 'completed' : 'cancelled', 'hangup');
   });
 
+  // A client whose socket dropped mid-call reattaches here; the media connection never stopped.
+  socket.on('call:rejoin', (payload, ack = () => {}) => {
+    const call = calls.get(payload?.callId);
+    if (!isParty(call, userId) || !call.answeredAt) return ack({ error: 'Call has ended.' });
+    if (call.callerId === userId) call.callerSocket = socket.id;
+    else call.calleeSocket = socket.id;
+    call.dropped.delete(userId);
+    if (!call.dropped.size) {
+      clearTimeout(call.graceTimer);
+      call.graceTimer = null;
+      call.droppedAt = null;
+    }
+    ack({ ok: true });
+  });
+
   // Relays SDP offers/answers and ICE candidates between the two connected sockets only.
   socket.on('call:signal', (payload) => {
     if (!limit()) return;
@@ -112,9 +170,15 @@ export function registerCallHandlers(io, socket, limit) {
 
   socket.on('disconnect', () => {
     for (const call of calls.values()) {
-      if (call.callerSocket === socket.id || call.calleeSocket === socket.id) {
-        finish(io, call.callId, call.answeredAt ? 'completed' : 'cancelled', 'disconnected');
+      if (call.callerSocket !== socket.id && call.calleeSocket !== socket.id) continue;
+      if (!call.answeredAt) {
+        finish(io, call.callId, 'cancelled', 'disconnected');
+        continue;
       }
+      // Answered calls carry on peer-to-peer, so give the client time to reconnect.
+      call.dropped.add(userId);
+      call.droppedAt ??= Date.now();
+      call.graceTimer ??= setTimeout(() => finish(io, call.callId, 'completed', 'disconnected'), config.callReconnectGraceMs);
     }
   });
 }

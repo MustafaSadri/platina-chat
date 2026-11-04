@@ -79,7 +79,12 @@ delivered cursor reaches it and *read* when any other member's read cursor does 
   that the user uploaded the file or belongs to a chat with a visible message referencing it, then
   redirect to a 60-second presigned URL. Only safe media types render inline.
 - **Calls:** Socket.IO relays invite/accept/reject/SDP/ICE between exactly two sockets; media is
-  peer-to-peer (or relayed by TURN). A call record is written to the chat when the call ends.
+  peer-to-peer (or relayed by TURN). A call record is written to the chat when the call ends. If a
+  socket drops during an answered call, the client has a grace period to reattach with `call:rejoin`.
+- **Notifications:** clients report whether the app is on screen. Anyone not looking at it gets a Web
+  Push (a connected socket isn't enough, since phones keep sockets open in the background). While a
+  call rings the push repeats, and people opening the app are sent the ringing call on connect.
+  Each subscription belongs to a session, so ending the session stops pushes to that device.
 - **Translation:** `POST /api/messages/:id/translate` checks visibility, detects EN/RU by script, calls
   the provider, caches the result; edits clear the cache. Auto-translate is a per-member chat setting
   applied by the client as messages arrive.
