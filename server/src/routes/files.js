@@ -141,7 +141,7 @@ router.get('/files/:id', asyncH(async (req, res) => {
   const file = rows[0];
   if (!file) throw new HttpError(404, 'File not found.', 'NOT_FOUND');
   const inline = INLINE_TYPES.has(file.mime_type) && req.query.download !== '1';
-  await storage.serve(res, file.storage_key, {
+  await storage.serve(req, res, file.storage_key, {
     mime: inline ? file.mime_type : 'application/octet-stream',
     disposition: contentDisposition(inline ? 'inline' : 'attachment', file.file_name),
   });

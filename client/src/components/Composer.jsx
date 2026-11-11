@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../lib/api.js';
 import { useStore } from '../lib/store.js';
-import { duration, messagePreview } from '../lib/format.js';
+import { duration, messagePreview, prepareImage } from '../lib/format.js';
 import { resetTyping, sendTyping } from '../lib/socket.js';
 import { detectLangClient, useT } from '../lib/i18n.js';
 import Icon from './Icons.jsx';
@@ -214,7 +214,8 @@ export default function Composer({ chat }) {
     const replyTo = s.replyTo;
     useStore.setState({ replyTo: null });
     setText('');
-    for (const [i, f] of files.entries()) {
+    for (const [i, original] of files.entries()) {
+      const f = await prepareImage(original);
       const dims = await imageSize(f);
       s.sendFile(chat.id, f, { caption: i === 0 ? caption : '', replyTo: i === 0 ? replyTo : null, fields: dims });
     }

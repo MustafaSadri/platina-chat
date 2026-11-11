@@ -613,3 +613,12 @@ input[type='checkbox'].switch { width: 38px; } /* the generic checkbox rule woul
 .preview-grid.count-1 .preview-item img, .preview-grid.count-1 .preview-item video { object-fit: contain; max-height: 50dvh; }
 .preview-file { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 8px; color: var(--text-secondary); }
 .caption-input { width: 100%; resize: none; }
+
+/* photo viewer: zoom with pinch / double-tap */
+.viewer-image { touch-action: none; transition: transform 0.12s ease-out; will-change: transform; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+
+/* a photo that can't be loaded */
+.media-missing { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; min-height: 140px; background: var(--bg-secondary); color: var(--text-secondary); border-radius: inherit; font-size: 14px; }
+
+.storage-warning { border: 1px solid var(--danger); background: rgba(229, 57, 53, 0.08); border-radius: 12px; padding: 12px 14px; }
+.storage-warning p { margin: 6px 0 0; }

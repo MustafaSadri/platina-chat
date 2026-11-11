@@ -82,12 +82,25 @@ function UploadProgress({ progress = 0 }) {
 
 function Attachment({ file, mine, onOpenMedia }) {
   const t = useT();
-  const src = file.localUrl || file.url;
+  const [broken, setBroken] = useState(false);
+  const [reloads, setReloads] = useState(0);
+  const base = file.localUrl || file.url;
+  const src = reloads && !file.localUrl ? `${base}${base.includes('?') ? '&' : '?'}r=${reloads}` : base;
   if (file.kind === 'image') {
     const ratio = file.width && file.height ? file.height / file.width : 0.75;
+    if (broken) {
+      return (
+        <button className="media media-missing" style={{ aspectRatio: `${1 / Math.min(Math.max(ratio, 0.4), 1.6)}` }}
+          onClick={(e) => { e.stopPropagation(); setBroken(false); setReloads((n) => n + 1); }}>
+          <Icon name="file" size={28} />
+          <span>{t('Photo unavailable')}</span>
+          <span className="small">{t('Tap to reload')}</span>
+        </button>
+      );
+    }
     return (
       <button className="media" onClick={(e) => { e.stopPropagation(); if (!file.uploading) onOpenMedia(file); }} style={{ aspectRatio: `${1 / Math.min(Math.max(ratio, 0.4), 1.6)}` }}>
-        <img src={src} alt={file.name} loading="lazy" />
+        <img src={src} alt={file.name} loading="lazy" onError={() => setBroken(true)} />
         {file.uploading && <UploadProgress progress={file.progress} />}
       </button>
     );

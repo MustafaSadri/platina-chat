@@ -5,10 +5,13 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { S3Client, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../config.js';
+import { HttpError } from '../middleware.js';
 
 const cfg = config.storage;
+
+// A file id always refers to the same bytes, so devices may keep a copy for a week.
+const FILE_CACHE = 'private, max-age=604800';
 
 export function newStorageKey(chatId) {
   const d = new Date();
@@ -35,10 +38,10 @@ class LocalStorage {
   }
   async remove(key) { await fsp.rm(this.pathFor(key), { force: true }); }
   /** Local driver streams through Express (supports Range requests). */
-  async serve(res, key, { mime, disposition }) {
+  async serve(req, res, key, { mime, disposition }) {
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Disposition', disposition);
-    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Cache-Control', FILE_CACHE);
     res.sendFile(this.pathFor(key), { headers: { 'Content-Type': mime } });
   }
   async check() { await fsp.mkdir(this.dir, { recursive: true }); }
@@ -62,15 +65,33 @@ class S3Storage {
     }).done();
   }
   async remove(key) { await this.client.send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key })); }
-  /** The bucket stays private; after the permission check we hand out a 60-second signed URL. */
-  async serve(res, key, { mime, disposition }) {
-    const url = await getSignedUrl(
-      this.client,
-      new GetObjectCommand({ Bucket: cfg.bucket, Key: key, ResponseContentType: mime, ResponseContentDisposition: disposition }),
-      { expiresIn: 60 },
-    );
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.redirect(302, url);
+  /**
+   * The bucket stays private and files are streamed through the app after the permission check.
+   * (Redirecting to short-lived signed links broke images on iPhone once a link expired.)
+   * Range requests are passed through so videos and voice messages can seek.
+   */
+  async serve(req, res, key, { mime, disposition }) {
+    let object;
+    try {
+      object = await this.client.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key, Range: req.headers.range }));
+    } catch (err) {
+      const status = err.$metadata?.httpStatusCode;
+      if (status === 404 || err.name === 'NoSuchKey') throw new HttpError(404, 'File not found.', 'NOT_FOUND');
+      if (status === 416) {
+        res.status(416).end();
+        return;
+      }
+      throw err;
+    }
+    res.status(object.ContentRange ? 206 : 200);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', disposition);
+    res.setHeader('Cache-Control', FILE_CACHE);
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (object.ContentLength !== undefined) res.setHeader('Content-Length', object.ContentLength);
+    if (object.ContentRange) res.setHeader('Content-Range', object.ContentRange);
+    if (object.ETag) res.setHeader('ETag', object.ETag);
+    await pipeline(object.Body, res).catch(() => {}); // the viewer closed the photo mid-download
   }
   async check() { await this.client.send(new HeadBucketCommand({ Bucket: cfg.bucket })); }
 }

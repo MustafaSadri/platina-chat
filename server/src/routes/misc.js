@@ -103,7 +103,7 @@ router.delete('/profile/avatar', asyncH(async (req, res) => {
 router.get('/users/:id/avatar', asyncH(async (req, res) => {
   const { rows } = await query('SELECT avatar_key FROM users WHERE id = $1', [Number(req.params.id) || 0]);
   if (!rows[0]?.avatar_key) throw new HttpError(404, 'No picture.', 'NOT_FOUND');
-  await storage.serve(res, rows[0].avatar_key, { mime: 'image/jpeg', disposition: contentDisposition('inline', 'avatar.jpg') });
+  await storage.serve(req, res, rows[0].avatar_key, { mime: 'image/jpeg', disposition: contentDisposition('inline', 'avatar.jpg') });
 }));
 
 router.get('/presence', asyncH(async (req, res) => {

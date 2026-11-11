@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { config } from '../config.js';
 import { query } from '../db.js';
 import { HttpError, asyncH, parse } from '../middleware.js';
 import { deleteUserSessions, generateTempPassword, hashPassword, publicUser } from '../services/auth.js';
@@ -239,7 +240,11 @@ router.delete('/groups/:id', asyncH(async (req, res) => {
 // ---------------------------------------------------------------------------
 
 router.get('/settings', asyncH(async (req, res) => {
-  res.json({ retentionDays: await getRetentionDays() });
+  res.json({
+    retentionDays: await getRetentionDays(),
+    // Render's own disk is wiped on every deploy and restart: only R2 keeps files.
+    filesPersistent: config.storage.driver === 's3' || !config.isProd,
+  });
 }));
 
 router.put('/settings', asyncH(async (req, res) => {

@@ -129,16 +129,115 @@ function PinnedBar({ chatId, onJump }) {
   );
 }
 
+const NO_ZOOM = { scale: 1, x: 0, y: 0 };
+const touchDistance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+/** Full-screen photo: pinch or double-tap to zoom, drag to look around, Back (or the phone's back gesture) to close. */
 function MediaViewer({ file, onClose }) {
+  const t = useT();
+  const [zoom, setZoom] = useState(NO_ZOOM);
+  const [saving, setSaving] = useState(false);
+  const gesture = useRef(null);
+  const lastTap = useRef(0);
+  const lastTouch = useRef(0);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  // Opening adds a history step, so Android's back button and iPhone's back swipe close the photo, not the app.
+  useEffect(() => {
+    window.history.pushState({ viewer: true }, '');
+    const onPop = () => closeRef.current();
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); window.history.back(); } };
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('keydown', onKey, true);
+    return () => { window.removeEventListener('popstate', onPop); window.removeEventListener('keydown', onKey, true); };
+  }, []);
+  const close = () => (window.history.state?.viewer ? window.history.back() : onClose());
+
+  const toggleZoom = () => setZoom((z) => (z.scale > 1 ? NO_ZOOM : { scale: 2.5, x: 0, y: 0 }));
+  const onTouchStart = (e) => {
+    lastTouch.current = Date.now();
+    if (e.touches.length === 2) {
+      gesture.current = { kind: 'pinch', dist: touchDistance(e.touches[0], e.touches[1]), start: zoom };
+      return;
+    }
+    const p = e.touches[0];
+    const now = Date.now();
+    if (now - lastTap.current < 300) {
+      lastTap.current = 0;
+      gesture.current = null;
+      toggleZoom();
+      return;
+    }
+    lastTap.current = now;
+    gesture.current = { kind: 'pan', x: p.clientX, y: p.clientY, start: zoom };
+  };
+  const onTouchMove = (e) => {
+    const g = gesture.current;
+    if (!g) return;
+    if (g.kind === 'pinch' && e.touches.length === 2) {
+      const scale = Math.min(5, Math.max(1, (g.start.scale * touchDistance(e.touches[0], e.touches[1])) / g.dist));
+      setZoom({ ...g.start, scale });
+    } else if (g.kind === 'pan' && g.start.scale > 1) {
+      const p = e.touches[0];
+      setZoom({ ...g.start, x: g.start.x + p.clientX - g.x, y: g.start.y + p.clientY - g.y });
+    }
+  };
+  const onTouchEnd = (e) => {
+    if (e.touches.length) return;
+    gesture.current = null;
+    setZoom((z) => (z.scale < 1.05 ? NO_ZOOM : z));
+  };
+
+  /** On phones this opens the share sheet ("Save Image" on iPhone); on computers it downloads. */
+  async function save() {
+    if (!file.url || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${file.url}?download=1`, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const shared = new File([blob], file.name, { type: file.mime || blob.type || 'image/jpeg' });
+      if (navigator.canShare?.({ files: [shared] })) {
+        await navigator.share({ files: [shared] }).catch(() => {});
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }
+    } catch {
+      useStore.getState().showToast(t('Could not save the photo. Check your connection and try again.'), 'error');
+    }
+    setSaving(false);
+  }
+
   return (
-    <div className="viewer" onClick={onClose}>
+    <div className="viewer" onClick={() => zoom.scale === 1 && close()}>
       <div className="viewer-bar" onClick={(e) => e.stopPropagation()}>
-        <button className="icon-btn light" onClick={onClose} aria-label="Back"><Icon name="back" /></button>
+        <button className="icon-btn light" onClick={close} aria-label="Back"><Icon name="back" /></button>
         <span className="ellipsis">{file.name}</span>
-        <a className="icon-btn light" href={`${file.url}?download=1`} download={file.name} aria-label="Download"><Icon name="download" /></a>
-        <button className="icon-btn light" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
+        {file.url && (
+          <button className="icon-btn light" onClick={save} disabled={saving} aria-label="Download" title={t('Save')}>
+            {saving ? <span className="spinner small" /> : <Icon name="download" />}
+          </button>
+        )}
       </div>
-      <img src={file.localUrl || file.url} alt={file.name} onClick={(e) => e.stopPropagation()} />
+      <img
+        src={file.localUrl || file.url}
+        alt={file.name}
+        className="viewer-image"
+        draggable={false}
+        style={{ transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})` }}
+        onClick={(e) => e.stopPropagation()}
+        // Touch screens also fire a double-click after a double-tap; the touch handler already zoomed.
+        onDoubleClick={() => { if (Date.now() - lastTouch.current > 800) toggleZoom(); }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      />
     </div>
   );
 }

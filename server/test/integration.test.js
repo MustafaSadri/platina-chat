@@ -441,6 +441,19 @@ describe('files', () => {
     assert.equal((await new Client().req('GET', `/api/files/${fileId}`, null, { raw: true })).status, 401);
   });
 
+  test('files support partial downloads (video seeking) and can be cached by the device', async () => {
+    const fd = new FormData();
+    fd.append('file', new Blob([Buffer.from('0123456789abcdef')], { type: 'video/mp4' }), 'clip.mp4');
+    const up = await alice.req('POST', `/api/chats/${dm}/files`, fd);
+    await alice.post(`/api/chats/${dm}/messages`, { fileId: up.body.file.id });
+    const part = await bob.req('GET', `/api/files/${up.body.file.id}`, null, { raw: true, headers: { range: 'bytes=4-7' } });
+    assert.equal(part.status, 206);
+    assert.equal(await part.text(), '4567');
+    const whole = await bob.req('GET', `/api/files/${up.body.file.id}`, null, { raw: true });
+    assert.equal(whole.status, 200);
+    assert.match(whole.headers.get('cache-control'), /private, max-age=\d+/);
+  });
+
   test('dangerous types are forced to download', async () => {
     const fd = new FormData();
     fd.append('file', new Blob(['<script>alert(1)</script>'], { type: 'text/html' }), 'x.html');

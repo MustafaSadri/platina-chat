@@ -447,10 +447,20 @@ try {
     return b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
   });
   if (!backReachable) throw new Error('the photo covers the viewer back button');
+  await emp.waitForFunction(() => { const img = document.querySelector('.viewer-image'); return img?.complete && img.naturalWidth > 0; }, { timeout: 10_000 });
+  const imgBox = await (await emp.$('.viewer-image')).boundingBox();
+  await emp.touchscreen.tap(imgBox.x + imgBox.width / 2, imgBox.y + imgBox.height / 2);
+  await sleep(120);
+  await emp.touchscreen.tap(imgBox.x + imgBox.width / 2, imgBox.y + imgBox.height / 2);
+  await emp.waitForFunction(() => /scale\(2\.5\)/.test(document.querySelector('.viewer-image').style.transform), { timeout: 3000 });
+  await sleep(300);
   await emp.screenshot({ path: `${shots}/25-mobile-photo-viewer.png` });
+  step('double-tap zooms the photo');
+  if (!(await emp.$('.viewer [aria-label="Download"]'))) throw new Error('no save button in the photo viewer');
   await emp.click('.viewer [aria-label="Back"]');
   await emp.waitForFunction(() => !document.querySelector('.viewer'));
-  step('photo viewer has a reachable Back button');
+  await emp.waitForSelector('.composer textarea');
+  step('photo viewer has a reachable Back button and closes back to the chat');
 
   // ---------------------------------------------------------------- profile
   await admin.click('.sidebar-header .icon-btn');

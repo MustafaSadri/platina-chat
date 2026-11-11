@@ -99,6 +99,40 @@ export function systemText(m, users = {}) {
   }
 }
 
+/**
+ * Phone photos are often 3–12 MB (and HEIC on iPhone). Like Telegram, send a JPEG with the longest
+ * side at most 2560 px: it loads fast everywhere and every device can show it. GIFs, small
+ * pictures and anything the browser can't read are sent unchanged.
+ */
+export async function prepareImage(file, maxSide = 2560) {
+  const heic = /image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
+  if (!heic && (!/^image\/(jpeg|png|webp)$/i.test(file.type) || file.size < 600 * 1024)) return file;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = url;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; // transparent PNGs get a white background instead of black
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    if (!blob || (blob.size >= file.size && !heic)) return file;
+    return new File([blob], `${(file.name || 'photo').replace(/\.[^.]+$/, '')}.jpg`, { type: 'image/jpeg' });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /** Center-crops a picture to a square JPEG, so profile photos stay small and any format works. */
 export async function cropToJpeg(file, size = 512) {
   const url = URL.createObjectURL(file);

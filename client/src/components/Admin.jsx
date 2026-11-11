@@ -251,10 +251,19 @@ function Groups() {
 function SettingsTab() {
   const t = useT();
   const [days, setDays] = useState(null);
-  useEffect(() => { api.get('/admin/settings').then((r) => setDays(r.retentionDays)).catch(toastErr); }, []);
+  const [persistent, setPersistent] = useState(true);
+  useEffect(() => {
+    api.get('/admin/settings').then((r) => { setDays(r.retentionDays); setPersistent(r.filesPersistent !== false); }).catch(toastErr);
+  }, []);
   if (days === null) return <div className="center pad"><span className="spinner" /></div>;
   return (
     <div className="stack">
+      {!persistent && (
+        <div className="storage-warning" role="alert">
+          <strong>{t('Photos and files are not stored permanently.')}</strong>
+          <p>{t('They are saved on the server’s temporary disk, which is cleared every time the app updates or restarts. Set up Cloudflare R2 storage (see the README) to keep them.')}</p>
+        </div>
+      )}
       <h3>{t('Message retention')}</h3>
       <p className="muted">{t('Messages (including ones users deleted) and their files are kept for this many days, then permanently purged. Set 0 to keep history forever.')}</p>
       <div className="row gap">
