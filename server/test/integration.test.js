@@ -698,6 +698,282 @@ describe('message visibility', () => {
   });
 });
 
+describe('groups: message actions', () => {
+  test('members can edit and delete their own messages, for themselves or everyone', async () => {
+    const g = (await alice.post('/api/chats/group', { title: 'Actions', memberIds: [bob.id] })).body.chat.id;
+    const list = async (c) => (await c.get(`/api/chats/${g}/messages`)).body.messages;
+
+    const mine = (await bob.post(`/api/chats/${g}/messages`, { body: 'bob wrote this' })).body.message;
+    const edited = await bob.patch(`/api/messages/${mine.id}`, { body: 'bob changed this' });
+    assert.equal(edited.status, 200);
+    const seen = (await list(alice)).find((m) => m.id === mine.id);
+    assert.equal(seen.body, 'bob changed this');
+    assert.ok(seen.editedAt, 'the message is marked as edited for other members');
+
+    assert.equal((await alice.patch(`/api/messages/${mine.id}`, { body: 'not yours' })).status, 403);
+
+    await bob.del(`/api/messages/${mine.id}`);
+    assert.ok(!(await list(bob)).some((m) => m.id === mine.id));
+    assert.ok((await list(alice)).some((m) => m.id === mine.id));
+
+    const other = (await bob.post(`/api/chats/${g}/messages`, { body: 'for everyone' })).body.message;
+    await bob.del(`/api/messages/${other.id}?forEveryone=1`);
+    assert.ok(!(await list(alice)).some((m) => m.id === other.id));
+  });
+});
+
+describe('mentions and seen by', () => {
+  test('an @mention reaches the person even when they muted the group', async () => {
+    const { pushRecipients } = await import('../src/services/push.js');
+    const g = (await alice.post('/api/chats/group', { title: 'Mentions', memberIds: [bob.id, carol.id] })).body.chat;
+    await bob.patch(`/api/chats/${g.id}/settings`, { muted: true });
+    const chat = { id: g.id, type: 'group' };
+    const sender = { id: alice.id };
+    const plain = await pushRecipients(chat, sender, { type: 'text', body: 'hello team' });
+    assert.deepEqual(plain.map((r) => r.userId), [carol.id]);
+    const tagged = await pushRecipients(chat, sender, { type: 'text', body: 'hey @BOB, see this.' });
+    assert.deepEqual(tagged.map((r) => r.userId).sort(), [bob.id, carol.id].sort());
+    assert.equal(tagged.find((r) => r.userId === bob.id).mentioned, true);
+    assert.equal(tagged.find((r) => r.userId === carol.id).mentioned, false);
+    const email = await pushRecipients(chat, sender, { type: 'text', body: 'mail me at x@bob.com' });
+    assert.deepEqual(email.map((r) => r.userId), [carol.id]);
+  });
+
+  test('the sender sees who read a group message and when', async () => {
+    const g = (await alice.post('/api/chats/group', { title: 'Receipts', memberIds: [bob.id, carol.id] })).body.chat.id;
+    const m = (await alice.post(`/api/chats/${g}/messages`, { body: 'did you read this?' })).body.message;
+    let r = await alice.get(`/api/messages/${m.id}/reads`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.read, []);
+    assert.equal(r.body.unread.length, 2);
+
+    await bob.post(`/api/chats/${g}/read`, { messageId: m.id });
+    r = await alice.get(`/api/messages/${m.id}/reads`);
+    assert.deepEqual(r.body.read.map((x) => x.user.id), [bob.id]);
+    assert.ok(Date.now() - new Date(r.body.read[0].readAt).getTime() < 60_000);
+    assert.deepEqual(r.body.unread.map((u) => u.id), [carol.id]);
+
+    // A later message: bob's earlier read time doesn't count for it.
+    const later = (await alice.post(`/api/chats/${g}/messages`, { body: 'and this one?' })).body.message;
+    assert.deepEqual((await alice.get(`/api/messages/${later.id}/reads`)).body.read, []);
+    assert.equal((await bob.get(`/api/messages/${m.id}/reads`)).status, 403);
+  });
+});
+
+describe('profiles', () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+  const upload = (client, bytes, type = 'image/jpeg') => {
+    const fd = new FormData();
+    fd.append('file', new Blob([bytes], { type }), 'me.jpg');
+    return client.req('POST', '/api/profile/avatar', fd);
+  };
+
+  test('changing a display name keeps the username and reaches everyone', async () => {
+    const manna = await makeEmployee(admin, 'manna');
+    const dm = (await manna.post('/api/chats/direct', { userId: alice.id })).body.chat.id;
+    const s = await alice.socket();
+    const changed = waitFor(s, 'directory:changed');
+    const r = await manna.patch('/api/profile', { displayName: 'Pikachu' });
+    assert.equal(r.status, 200);
+    await changed;
+    assert.equal(r.body.user.displayName, 'Pikachu');
+    assert.equal(r.body.user.username, 'manna');
+    const chat = (await alice.get('/api/chats')).body.chats.find((c) => c.id === dm);
+    assert.equal(chat.title, 'Pikachu');
+    assert.equal((await new Client().post('/api/auth/login', { username: 'manna', password: manna.password })).status, 200);
+    assert.equal((await manna.patch('/api/profile', { displayName: '   ' })).status, 400);
+  });
+
+  test('a profile picture is visible to colleagues and can be removed', async () => {
+    const pic = await makeEmployee(admin, 'pictured');
+    const r = await upload(pic, jpeg);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const url = r.body.user.avatarUrl;
+    assert.match(url, /^\/api\/users\/\d+\/avatar\?v=/);
+
+    const dm = (await alice.post('/api/chats/direct', { userId: pic.id })).body.chat;
+    assert.equal(dm.avatarUrl, url);
+    assert.equal(dm.peer.avatarUrl, url);
+    const shown = await alice.req('GET', url, null, { raw: true });
+    assert.equal(shown.status, 200);
+    assert.equal(shown.headers.get('content-type'), 'image/jpeg');
+    assert.equal((await new Client().req('GET', url, null, { raw: true })).status, 401);
+
+    await pic.del('/api/profile/avatar');
+    assert.equal((await alice.get(`/api/users/${pic.id}`)).body.user.avatarUrl, null);
+    assert.equal((await alice.req('GET', url, null, { raw: true })).status, 404);
+  });
+
+  test('only real JPEG pictures are accepted', async () => {
+    assert.equal((await upload(bob, Buffer.from('<script>alert(1)</script>'))).status, 400);
+    assert.equal((await upload(bob, Buffer.alloc(3 * 1024 * 1024, 0xff))).status, 413);
+  });
+});
+
+describe('deleting a chat for me', () => {
+  test('a removed person can be deleted from my list only, and activity brings it back', async () => {
+    const gone = await makeEmployee(admin, 'leaver');
+    const dm = (await alice.post('/api/chats/direct', { userId: gone.id })).body.chat.id;
+    await alice.post(`/api/chats/${dm}/messages`, { body: 'before' });
+    await admin.del(`/api/admin/users/${gone.id}`);
+
+    const s = await alice.socket();
+    const removed = waitFor(s, 'chat:removed', (e) => e.chatId === dm);
+    assert.equal((await alice.post(`/api/chats/${dm}/hide`)).status, 200);
+    await removed;
+    assert.ok(!(await alice.get('/api/chats')).body.chats.some((c) => c.id === dm));
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM messages WHERE chat_id = $1', [dm])).rows[0].n, 1);
+  });
+
+  test('the chat returns with only new messages when the other person writes', async () => {
+    const pair = await makeEmployee(admin, 'returning');
+    const dm = (await alice.post('/api/chats/direct', { userId: pair.id })).body.chat.id;
+    await pair.post(`/api/chats/${dm}/messages`, { body: 'old message' });
+    await alice.post(`/api/chats/${dm}/hide`);
+    assert.ok((await pair.get('/api/chats')).body.chats.some((c) => c.id === dm), 'the other person keeps the chat');
+
+    await pair.post(`/api/chats/${dm}/messages`, { body: 'new message' });
+    assert.ok((await alice.get('/api/chats')).body.chats.some((c) => c.id === dm));
+    const bodies = (await alice.get(`/api/chats/${dm}/messages`)).body.messages.map((m) => m.body);
+    assert.deepEqual(bodies, ['new message']);
+  });
+
+  test('groups cannot be deleted this way', async () => {
+    const g = (await alice.post('/api/chats/group', { title: 'Stays', memberIds: [] })).body.chat.id;
+    assert.equal((await alice.post(`/api/chats/${g}/hide`)).status, 400);
+  });
+});
+
+describe('group calls', () => {
+  let g;
+  let dave;
+
+  before(async () => {
+    dave = await makeEmployee(admin, 'grace');
+    g = (await alice.post('/api/chats/group', { title: 'Team call', memberIds: [bob.id, dave.id] })).body.chat.id;
+  });
+
+  test('members are rung, join each other, and the call is logged', async () => {
+    const a = await alice.socket();
+    const b = await bob.socket();
+    const d = await dave.socket();
+
+    const ringing = waitFor(b, 'group-call:ringing', (c) => c.chatId === g);
+    const started = await a.emitWithAck('group-call:start', { chatId: g, video: true });
+    assert.ok(started.callId, JSON.stringify(started));
+    assert.deepEqual(started.peers, []);
+    assert.equal((await ringing).from.id, alice.id);
+
+    const joined = waitFor(a, 'group-call:peer-joined');
+    const bJoin = await b.emitWithAck('group-call:join', { callId: started.callId });
+    assert.deepEqual(bJoin.peers, [alice.id]);
+    assert.equal((await joined).user.id, bob.id);
+
+    const dJoin = await d.emitWithAck('group-call:join', { callId: started.callId });
+    assert.deepEqual(dJoin.peers.sort(), [alice.id, bob.id].sort());
+
+    const sig = waitFor(d, 'group-call:signal');
+    a.emit('group-call:signal', { callId: started.callId, to: dave.id, data: { sdp: 'offer' } });
+    const got = await sig;
+    assert.equal(got.from, alice.id);
+    assert.deepEqual(got.data, { sdp: 'offer' });
+
+    const left = waitFor(a, 'group-call:peer-left');
+    b.emit('group-call:leave', { callId: started.callId });
+    assert.equal((await left).userId, bob.id);
+
+    const log = waitFor(b, 'message:new', (m) => m.type === 'call' && m.chatId === g);
+    const ended = waitFor(b, 'group-call:ended');
+    a.emit('group-call:leave', { callId: started.callId });
+    d.emit('group-call:leave', { callId: started.callId });
+    await ended;
+    const m = await log;
+    assert.equal(m.meta.group, true);
+    assert.equal(m.meta.status, 'completed');
+    assert.equal(m.meta.participants, 3);
+  });
+
+  test('starting while a call runs joins it instead of making a second one', async () => {
+    const a = await alice.socket();
+    const b = await bob.socket();
+    const first = await a.emitWithAck('group-call:start', { chatId: g, video: false });
+    const second = await b.emitWithAck('group-call:start', { chatId: g, video: false });
+    assert.equal(second.callId, first.callId);
+    assert.deepEqual(second.peers, [alice.id]);
+    const ended = waitFor(a, 'group-call:ended');
+    a.emit('group-call:leave', { callId: first.callId });
+    b.emit('group-call:leave', { callId: first.callId });
+    await ended;
+  });
+
+  test('non-members cannot start, join, or listen in', async () => {
+    const a = await alice.socket();
+    const c = await carol.socket();
+    assert.ok((await c.emitWithAck('group-call:start', { chatId: g })).error);
+    const { callId } = await a.emitWithAck('group-call:start', { chatId: g, video: false });
+    assert.ok((await c.emitWithAck('group-call:join', { callId })).error);
+    const ended = waitFor(a, 'group-call:ended');
+    a.emit('group-call:leave', { callId });
+    await ended;
+  });
+
+  test('someone in a group call shows as busy for a private call', async () => {
+    const a = await alice.socket();
+    const b = await bob.socket();
+    const { callId } = await a.emitWithAck('group-call:start', { chatId: g, video: false });
+    const dm = (await bob.post('/api/chats/direct', { userId: alice.id })).body.chat.id;
+    assert.equal((await b.emitWithAck('call:invite', { chatId: dm })).error, 'busy');
+    const ended = waitFor(a, 'group-call:ended');
+    a.emit('group-call:leave', { callId });
+    await ended;
+  });
+
+  test('a dropped participant can rejoin; the call ends after the grace period otherwise', async () => {
+    const a = await alice.socket();
+    const b = await bob.socket();
+    const { callId } = await a.emitWithAck('group-call:start', { chatId: g, video: false });
+    await b.emitWithAck('group-call:join', { callId });
+    b.close();
+    await new Promise((r) => setTimeout(r, 100));
+    const b2 = await bob.socket();
+    assert.deepEqual(await b2.emitWithAck('group-call:rejoin', { callId }), { ok: true });
+    await new Promise((r) => setTimeout(r, 500));
+    const sig = waitFor(b2, 'group-call:signal');
+    a.emit('group-call:signal', { callId, to: bob.id, data: { candidate: 'x' } });
+    await sig;
+
+    const left = waitFor(a, 'group-call:peer-left');
+    b2.close();
+    assert.equal((await left).userId, bob.id);
+    const ended = waitFor(b, 'group-call:ended').catch(() => {});
+    a.emit('group-call:leave', { callId });
+    await ended;
+  });
+
+  test('a member opening the app during a group call hears about it', async () => {
+    const a = await alice.socket();
+    const { callId } = await a.emitWithAck('group-call:start', { chatId: g, video: false });
+    const s = ioClient(base, { extraHeaders: { cookie: bob.cookie }, transports: ['websocket'], reconnection: false, autoConnect: false });
+    sockets.push(s);
+    const ringing = waitFor(s, 'group-call:ringing', (c) => c.callId === callId);
+    s.connect();
+    await ringing;
+    const ended = waitFor(a, 'group-call:ended');
+    a.emit('group-call:leave', { callId });
+    await ended;
+  });
+
+  test('the notification Decline button ends a private call', async () => {
+    const dm = (await alice.post('/api/chats/direct', { userId: bob.id })).body.chat.id;
+    const a = await alice.socket();
+    const { callId } = await a.emitWithAck('call:invite', { chatId: dm, video: false });
+    const ended = waitFor(a, 'call:ended');
+    assert.deepEqual((await bob.post(`/api/calls/${callId}/decline`)).body, { ok: true });
+    assert.equal((await ended).reason, 'declined');
+    assert.deepEqual((await bob.post(`/api/calls/${callId}/decline`)).body, { ok: false });
+  });
+});
+
 describe('interrupted uploads', () => {
   const listFiles = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()) : []);
 

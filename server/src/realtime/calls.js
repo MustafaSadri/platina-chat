@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { query } from '../db.js';
-import { isForeground, toChat, userRoom } from './bus.js';
-import { getMessage } from '../services/chats.js';
+import { getIo, isForeground, toChat, userRoom } from './bus.js';
+import { publicUser } from '../services/auth.js';
+import { getMessage, revealChat } from '../services/chats.js';
 import { sendToUser } from '../services/push.js';
+import { declineGroupCall, isInGroupCall } from './groupCalls.js';
 
 // Active 1:1 calls. State is per server instance (see docs/ARCHITECTURE.md for scaling notes).
 const calls = new Map();
@@ -13,6 +15,7 @@ const PUSH_RING_INTERVAL_MS = 7_000;
 const PUSH_RING_COUNT = 6;
 
 async function recordCall(call, status) {
+  await revealChat(call.chatId);
   const endedAt = call.droppedAt || Date.now();
   const durationSec = call.answeredAt ? Math.round((endedAt - call.answeredAt) / 1000) : 0;
   const { rows } = await query(
@@ -38,6 +41,8 @@ function ringDevices(call) {
       title: call.from.displayName,
       body: call.video ? '📹 Incoming video call' : '📞 Incoming call',
       chatId: call.chatId,
+      callId: call.callId,
+      type: 'call', // adds Answer and Decline buttons where the device supports them
       tag: `call-${call.callId}-${count}`, // a new tag each time, so every repeat alerts
     }, { ttl: 30 });
   };
@@ -72,6 +77,16 @@ function finish(io, callId, status, reason) {
 
 const isParty = (call, userId) => call && (call.callerId === userId || call.calleeId === userId);
 
+export const isInDirectCall = (userId) => [...calls.values()].some((c) => isParty(c, userId));
+
+/** The notification's Decline button. Returns false for calls that are already over. */
+export function declineFromNotification(callId, userId) {
+  const call = calls.get(callId);
+  if (!call) return declineGroupCall(callId, userId);
+  if (call.calleeId === userId && !call.answeredAt) finish(getIo(), callId, 'declined', 'declined');
+  return true;
+}
+
 export function registerCallHandlers(io, socket, limit) {
   const { userId } = socket.data;
 
@@ -96,19 +111,19 @@ export function registerCallHandlers(io, socket, limit) {
       );
       const peer = rows[0];
       if (!peer || peer.status !== 'active') return ack({ error: 'Calls are only available in private chats with active users.' });
-      for (const c of calls.values()) {
-        if (isParty(c, peer.peer_id)) return ack({ error: 'busy' });
-        if (isParty(c, userId)) return ack({ error: 'You are already in a call.' });
-      }
+      if (isInDirectCall(peer.peer_id) || isInGroupCall(peer.peer_id)) return ack({ error: 'busy' });
+      if (isInDirectCall(userId) || isInGroupCall(userId)) return ack({ error: 'You are already in a call.' });
+      // Read fresh: names and photos may have changed since this socket connected.
+      const from = publicUser((await query('SELECT * FROM users WHERE id = $1', [userId])).rows[0]);
       const callId = crypto.randomUUID();
       const call = {
         callId, chatId, video, callerId: userId, calleeId: peer.peer_id,
         callerSocket: socket.id, calleeSocket: null, answeredAt: null,
-        from: socket.data.user, dropped: new Set(), droppedAt: null,
+        from, dropped: new Set(), droppedAt: null,
       };
       calls.set(callId, call);
       call.timer = setTimeout(() => finish(io, callId, 'missed', 'no-answer'), RING_TIMEOUT_MS);
-      io.to(userRoom(peer.peer_id)).emit('call:incoming', { callId, chatId, video, from: socket.data.user });
+      io.to(userRoom(peer.peer_id)).emit('call:incoming', { callId, chatId, video, from });
       ringDevices(call);
       ack({ callId });
     } catch (err) {

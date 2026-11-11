@@ -3,8 +3,15 @@ import * as api from './lib/api.js';
 import { useStore } from './lib/store.js';
 import { connectSocket, disconnectSocket } from './lib/socket.js';
 import { refreshPushSubscription } from './lib/notify.js';
+import { requestAnswer } from './lib/call.js';
+import { answerGroupIfRinging } from './lib/groupCall.js';
 import { Login, ChangePassword } from './components/Auth.jsx';
 import Messenger from './components/Messenger.jsx';
+
+function answerCall(callId) {
+  requestAnswer(callId);
+  answerGroupIfRinging(callId);
+}
 
 function useThemeClass() {
   const theme = useStore((s) => s.theme);
@@ -44,15 +51,21 @@ export default function App() {
   useEffect(() => {
     if (!ready) return;
     const s = useStore.getState();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('answer')) answerCall(params.get('answer')); // set before the socket connects
     s.loadAll()
       .then(() => {
-        const chatId = Number(new URLSearchParams(window.location.search).get('chat'));
+        const chatId = Number(params.get('chat'));
         if (chatId && useStore.getState().chats[chatId]) useStore.getState().openChat(chatId);
       })
       .catch((err) => s.showToast(err.message, 'error'));
     connectSocket();
     refreshPushSubscription();
-    const onSwMessage = (e) => e.data?.type === 'open-chat' && e.data.chatId && useStore.getState().openChat(e.data.chatId);
+    const onSwMessage = (e) => {
+      if (e.data?.type !== 'open-chat') return;
+      if (e.data.chatId) useStore.getState().openChat(e.data.chatId);
+      if (e.data.answerCallId) answerCall(e.data.answerCallId);
+    };
     navigator.serviceWorker?.addEventListener('message', onSwMessage);
     return () => navigator.serviceWorker?.removeEventListener('message', onSwMessage);
   }, [ready]);

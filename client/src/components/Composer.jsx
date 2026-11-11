@@ -1,10 +1,55 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../lib/api.js';
 import { useStore } from '../lib/store.js';
 import { duration, messagePreview } from '../lib/format.js';
 import { resetTyping, sendTyping } from '../lib/socket.js';
 import { detectLangClient, useT } from '../lib/i18n.js';
 import Icon from './Icons.jsx';
+import Avatar from './Avatar.jsx';
+
+/** Telegram-style preview of chosen photos and files, with a caption, before anything is sent. */
+function MediaPreview({ files, initialCaption, onCancel, onSend }) {
+  const t = useT();
+  const [caption, setCaption] = useState(initialCaption);
+  const previews = useMemo(() => files.map((f) => ({
+    file: f,
+    kind: f.type.startsWith('image/') ? 'image' : f.type.startsWith('video/') ? 'video' : 'file',
+    url: f.type.startsWith('image/') || f.type.startsWith('video/') ? URL.createObjectURL(f) : null,
+  })), [files]);
+  useEffect(() => () => previews.forEach((p) => p.url && URL.revokeObjectURL(p.url)), [previews]);
+  const photos = previews.every((p) => p.kind === 'image');
+  const title = files.length === 1
+    ? t(photos ? 'Send photo' : 'Send file')
+    : t(photos ? 'Send {n} photos' : 'Send {n} files', { n: files.length });
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal media-preview" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title}>
+        <div className="modal-header">
+          <span className="strong">{title}</span>
+          <button className="icon-btn" onClick={onCancel} aria-label={t('Cancel')}><Icon name="close" /></button>
+        </div>
+        <div className="modal-body">
+          <div className={`preview-grid count-${Math.min(files.length, 4)}`}>
+            {previews.map((p, i) => (
+              <div key={i} className="preview-item">
+                {p.kind === 'image' && <img src={p.url} alt={p.file.name} />}
+                {p.kind === 'video' && <video src={p.url} muted playsInline preload="metadata" />}
+                {p.kind === 'file' && <div className="preview-file"><Icon name="file" size={28} /><span className="ellipsis small">{p.file.name}</span></div>}
+              </div>
+            ))}
+          </div>
+          <textarea className="caption-input" rows={2} autoFocus={!isTouch()} placeholder={t('Add a caption…')} value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !isTouch()) { e.preventDefault(); onSend(caption.trim()); } }} />
+        </div>
+        <div className="modal-footer">
+          <button className="btn ghost" onClick={onCancel}>{t('Cancel')}</button>
+          <button className="btn primary media-send" onClick={() => onSend(caption.trim())}><Icon name="send" size={18} /> {t('Send')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const EMOJI = ['😀', '😂', '😊', '😍', '🤔', '😎', '😢', '😡', '👍', '👎', '👏', '🙏', '💪', '🤝', '👌', '✌️',
   '❤️', '🔥', '🎉', '✅', '❌', '⚠️', '📌', '📎', '📅', '⏰', '💼', '📈', '📉', '💡', '🚀', '☕'];
@@ -100,6 +145,25 @@ export default function Composer({ chat }) {
   const fileInput = useRef();
   const recorder = useRecorder();
   const draftKey = `draft-${chat.id}`;
+  const [staged, setStaged] = useState(null); // files waiting in the caption preview
+  const [mention, setMention] = useState(null); // { query, start, end, index } while typing @name
+  const [members, setMembers] = useState([]);
+  // Where the cursor goes after the app changes the text, applied in the same paint so fast typing lands in the right place.
+  const caretAfterUpdate = useRef(null);
+  useLayoutEffect(() => {
+    if (caretAfterUpdate.current === null || !input.current) return;
+    input.current.setSelectionRange(caretAfterUpdate.current, caretAfterUpdate.current);
+    caretAfterUpdate.current = null;
+  }, [text]);
+
+  useEffect(() => {
+    if (chat.type !== 'group') return undefined;
+    const load = () => api.get(`/chats/${chat.id}`).then((r) => setMembers(r.chat.members)).catch(() => {});
+    load();
+    const onChange = (e) => e.detail === chat.id && load();
+    window.addEventListener('members-changed', onChange);
+    return () => window.removeEventListener('members-changed', onChange);
+  }, [chat.id, chat.type, chat.memberCount]);
 
   const canModerate = chat.type === 'group' && ['owner', 'admin'].includes(chat.myRole);
   const readOnly = chat.type === 'group' && chat.onlyAdminsPost && !canModerate;
@@ -132,17 +196,48 @@ export default function Composer({ chat }) {
     return () => window.removeEventListener('composer-files', onFiles);
   });
 
-  async function sendFiles(files) {
+  /** Chosen files wait in a preview where a caption can be added, like Telegram. */
+  function sendFiles(files) {
     const maxMb = useStore.getState().config.maxUploadMb;
+    const ok = files.filter((f) => {
+      if (f.size <= maxMb * 1024 * 1024) return true;
+      useStore.getState().showToast(t('“{name}” is larger than {mb} MB.', { name: f.name, mb: maxMb }), 'error');
+      return false;
+    });
+    if (ok.length) setStaged(ok);
+  }
+
+  async function sendStaged(caption) {
+    const files = staged;
+    setStaged(null);
     const s = useStore.getState();
-    const caption = files.length === 1 ? text.trim() : '';
-    if (caption) setText('');
-    for (const f of files) {
-      if (f.size > maxMb * 1024 * 1024) { s.showToast(t('“{name}” is larger than {mb} MB.', { name: f.name, mb: maxMb }), 'error'); continue; }
-      const dims = await imageSize(f);
-      s.sendFile(chat.id, f, { caption, replyTo: s.replyTo, fields: dims });
-    }
+    const replyTo = s.replyTo;
     useStore.setState({ replyTo: null });
+    setText('');
+    for (const [i, f] of files.entries()) {
+      const dims = await imageSize(f);
+      s.sendFile(chat.id, f, { caption: i === 0 ? caption : '', replyTo: i === 0 ? replyTo : null, fields: dims });
+    }
+  }
+
+  // ---- @mentions (groups only)
+  function updateMention(value, caret) {
+    if (chat.type !== 'group') return setMention(null);
+    const match = /(?:^|\s)@([\w.-]{0,32})$/.exec(value.slice(0, caret));
+    setMention(match ? { query: match[1].toLowerCase(), start: caret - match[1].length - 1, end: caret, index: 0 } : null);
+  }
+  const suggestions = mention
+    ? members.filter((u) => u.id !== me.id && u.username
+      && (u.username.toLowerCase().startsWith(mention.query) || u.displayName.toLowerCase().includes(mention.query))).slice(0, 6)
+    : [];
+  function pickMention(user) {
+    const insert = `@${user.username} `;
+    const next = text.slice(0, mention.start) + insert + text.slice(mention.end);
+    const caret = mention.start + insert.length;
+    caretAfterUpdate.current = caret;
+    setText(next);
+    setMention(null);
+    input.current?.focus();
   }
 
   async function submit() {
@@ -171,6 +266,20 @@ export default function Composer({ chat }) {
   }
 
   function onKeyDown(e) {
+    if (suggestions.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        setMention((m) => ({ ...m, index: (m.index + step + suggestions.length) % suggestions.length }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pickMention(suggestions[mention.index] || suggestions[0]);
+        return;
+      }
+      if (e.key === 'Escape') { setMention(null); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !isTouch() && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
@@ -262,6 +371,18 @@ export default function Composer({ chat }) {
           <button className="btn ghost small" onClick={() => { setText(draftOriginal.text); setDraftOriginal(null); }}>{t('Show original')}</button>
         </div>
       )}
+      {suggestions.length > 0 && (
+        <div className="mention-list" role="listbox">
+          {suggestions.map((u, i) => (
+            <button key={u.id} role="option" aria-selected={i === mention.index} className={`mention-option ${i === mention.index ? 'on' : ''}`}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => pickMention(u)}>
+              <Avatar name={u.displayName} color={u.avatarColor} src={u.avatarUrl} size={32} />
+              <span className="grow left ellipsis"><span className="strong">{u.displayName}</span> <span className="muted">@{u.username}</span></span>
+            </button>
+          ))}
+        </div>
+      )}
+      {staged && <MediaPreview files={staged} initialCaption={text.trim()} onCancel={() => setStaged(null)} onSend={sendStaged} />}
       {emojiOpen && (
         <div className="emoji-panel">
           {EMOJI.map((e) => <button key={e} onClick={() => { setText((x) => x + e); input.current?.focus(); }}>{e}</button>)}
@@ -283,7 +404,14 @@ export default function Composer({ chat }) {
             rows={1}
             placeholder={editing ? t('Edit message') : t('Message')}
             value={text}
-            onChange={(e) => { setText(e.target.value); if (!e.target.value) setDraftOriginal(null); if (e.target.value) sendTyping(chat.id); }}
+            onChange={(e) => {
+              setText(e.target.value);
+              updateMention(e.target.value, e.target.selectionStart);
+              if (!e.target.value) setDraftOriginal(null);
+              if (e.target.value) sendTyping(chat.id);
+            }}
+            onSelect={(e) => updateMention(e.target.value, e.target.selectionStart)}
+            onBlur={() => setTimeout(() => setMention(null), 150)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             enterKeyHint={isTouch() ? 'enter' : 'send'}

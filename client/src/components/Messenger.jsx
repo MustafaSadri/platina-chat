@@ -4,6 +4,7 @@ import Sidebar from './Sidebar.jsx';
 import ChatView from './ChatView.jsx';
 import ChatInfo from './ChatInfo.jsx';
 import CallOverlay from './CallOverlay.jsx';
+import GroupCallOverlay from './GroupCallOverlay.jsx';
 import Modals from './Modals.jsx';
 import Icon from './Icons.jsx';
 import { useT } from '../lib/i18n.js';
@@ -43,6 +44,7 @@ export default function Messenger() {
       {infoOpen && activeChatId && <ChatInfo chatId={activeChatId} />}
       {!connected && booted && <div className="conn-banner"><span className="spinner small" /> {t('Connecting…')}</div>}
       <CallOverlay />
+      <GroupCallOverlay />
       <Modals />
       {toast && (
         <div className={`toast ${toast.kind}`} role="status">

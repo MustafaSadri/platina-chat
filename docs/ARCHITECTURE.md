@@ -81,6 +81,10 @@ delivered cursor reaches it and *read* when any other member's read cursor does 
 - **Calls:** Socket.IO relays invite/accept/reject/SDP/ICE between exactly two sockets; media is
   peer-to-peer (or relayed by TURN). A call record is written to the chat when the call ends. If a
   socket drops during an answered call, the client has a grace period to reattach with `call:rejoin`.
+- **Group calls:** a mesh: each participant holds a direct WebRTC connection to every other one, using
+  perfect negotiation so anyone can add a camera at any time. The server (`realtime/groupCalls.js`)
+  only tracks who is in the call and relays setup messages. Calls are capped at 8 people because
+  each person uploads a copy of their stream per participant; more would need a media server (SFU).
 - **Notifications:** clients report whether the app is on screen. Anyone not looking at it gets a Web
   Push (a connected socket isn't enough, since phones keep sockets open in the background). While a
   call rings the push repeats, and people opening the app are sent the ringing call on connect.

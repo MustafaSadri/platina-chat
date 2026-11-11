@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { acceptCall, declineCall, hangUp, toggleCam, toggleMic, useCall } from '../lib/call.js';
+import { acceptCall, declineCall, hangUp, toggleCam, toggleMic, toggleSpeaker, useCall } from '../lib/call.js';
+import { canSwitchSpeaker } from '../lib/audioRoute.js';
 import { duration } from '../lib/format.js';
 import Avatar from './Avatar.jsx';
 import Icon from './Icons.jsx';
@@ -73,7 +74,7 @@ export default function CallOverlay() {
       {!remoteHasVideo && (
         <div className="call-center">
           <div className={call.status === 'incoming' || call.status === 'outgoing' ? 'pulse' : ''}>
-            <Avatar name={peer.displayName} color={peer.avatarColor} size={120} />
+            <Avatar name={peer.displayName} color={peer.avatarColor} src={peer.avatarUrl} size={120} />
           </div>
           <div className="call-name">{peer.displayName}</div>
           <div className="call-status">{statusText}</div>
@@ -89,7 +90,8 @@ export default function CallOverlay() {
         ) : (
           <>
             <div className="call-ctl"><button className={`round ${call.camOff || !call.video ? '' : 'on'}`} onClick={toggleCam} disabled={call.status !== 'active'} aria-label="Camera"><Icon name={call.video && !call.camOff ? 'video' : 'videoOff'} size={26} /></button><span>{t('Camera')}</span></div>
-            <div className="call-ctl"><button className={`round ${call.micOff ? '' : 'on'}`} onClick={toggleMic} aria-label="Microphone"><Icon name={call.micOff ? 'micOff' : 'mic'} size={26} /></button><span>{t(call.micOff ? 'Unmute_mic' : 'Mute_mic')}</span></div>
+            {canSwitchSpeaker() && <div className="call-ctl"><button className={`round ${call.speaker ? 'on' : ''}`} onClick={toggleSpeaker} aria-label="Speaker"><Icon name="speaker" size={26} /></button><span>{t(call.speaker ? 'Speaker' : 'Earpiece')}</span></div>}
+          <div className="call-ctl"><button className={`round ${call.micOff ? '' : 'on'}`} onClick={toggleMic} aria-label="Microphone"><Icon name={call.micOff ? 'micOff' : 'mic'} size={26} /></button><span>{t(call.micOff ? 'Unmute_mic' : 'Mute_mic')}</span></div>
             <div className="call-ctl"><button className="round red" onClick={hangUp} aria-label="End call"><Icon name="hangup" size={28} /></button><span>{t('End')}</span></div>
           </>
         )}

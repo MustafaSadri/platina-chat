@@ -136,7 +136,7 @@ export async function getChatSummaries(userId, chatIds = null) {
        LEFT JOIN LATERAL (
          SELECT o.user_id AS id FROM chat_members o WHERE o.chat_id = c.id AND o.user_id <> $1 AND c.type = 'direct' LIMIT 1
        ) peer ON true
-      WHERE cm.user_id = $1 AND ($2::bigint[] IS NULL OR c.id = ANY($2::bigint[]))`,
+      WHERE cm.user_id = $1 AND NOT cm.hidden AND ($2::bigint[] IS NULL OR c.id = ANY($2::bigint[]))`,
     [userId, chatIds],
   );
   if (!rows.length) return [];
@@ -156,6 +156,7 @@ export async function getChatSummaries(userId, chatIds = null) {
     title: r.type === 'direct' ? peerById.get(r.peer_id)?.displayName || 'Deleted account' : r.title,
     description: r.description,
     avatarColor: r.type === 'direct' ? peerById.get(r.peer_id)?.avatarColor ?? 0 : r.avatar_color,
+    avatarUrl: r.type === 'direct' ? peerById.get(r.peer_id)?.avatarUrl ?? null : null,
     peer: r.peer_id ? peerById.get(r.peer_id) || null : null,
     myRole: r.my_role,
     onlyAdminsPost: r.only_admins_post,
@@ -211,8 +212,9 @@ export async function getOrCreateDirect(user, peerId) {
   const existing = await query('SELECT id FROM chats WHERE direct_key = $1', [key]);
   if (existing.rows[0]) {
     const chatId = existing.rows[0].id;
-    const member = await query('SELECT 1 FROM chat_members WHERE chat_id = $1 AND user_id = $2', [chatId, user.id]);
-    if (member.rows[0]) return { chatId, created: false };
+    // Opening a chat again brings it back if this person had deleted it from their list.
+    const member = await query('UPDATE chat_members SET hidden = FALSE WHERE chat_id = $1 AND user_id = $2', [chatId, user.id]);
+    if (member.rowCount) return { chatId, created: false };
   }
   if (user.role !== 'admin' && !user.can_start_direct) {
     throw new HttpError(403, 'You are not allowed to start new private chats.', 'FORBIDDEN');
@@ -235,6 +237,27 @@ export async function getOrCreateDirect(user, peerId) {
     return id;
   });
   return { chatId, created: true };
+}
+
+/**
+ * "Delete chat for me": clears a private chat and removes it from this person's list only.
+ * It comes back with just the new messages if the other person writes again.
+ */
+export async function hideChat(chatId, userId) {
+  const chat = await requireMember(chatId, userId);
+  if (chat.type !== 'direct') throw new HttpError(400, 'Only private chats can be deleted. Leave the group instead.', 'VALIDATION');
+  await query(
+    `UPDATE chat_members SET hidden = TRUE, pinned = FALSE, archived = FALSE,
+            cleared_before_id = (SELECT coalesce(max(id), 0) FROM messages WHERE chat_id = $1)
+      WHERE chat_id = $1 AND user_id = $2`,
+    [chatId, userId],
+  );
+  toUsers([userId], 'chat:removed', { chatId });
+}
+
+/** New activity brings a deleted private chat back for whoever hid it. */
+export async function revealChat(chatId) {
+  await query('UPDATE chat_members SET hidden = FALSE WHERE chat_id = $1 AND hidden', [chatId]);
 }
 
 export async function createGroup(actor, { title, description = '', memberIds = [], includeSelf = true, onlyAdminsPost = false, membersCanAdd = false }) {
@@ -455,7 +478,12 @@ export async function sendMessage(user, chatId, { body = '', fileId = null, repl
     [chatId, user.id, id],
   );
   // Unarchive the chat for everyone when new activity arrives (Telegram behaviour for non-muted chats).
-  await query('UPDATE chat_members SET archived = FALSE WHERE chat_id = $1 AND archived AND NOT muted', [chatId]);
+  // New activity unarchives the chat (unless muted) and brings it back for anyone who deleted it.
+  await query(
+    `UPDATE chat_members SET archived = archived AND muted, hidden = FALSE
+      WHERE chat_id = $1 AND ((archived AND NOT muted) OR hidden)`,
+    [chatId],
+  );
   const message = await getMessage(id);
   await toChat(chatId, 'message:new', message);
   notifyNewMessage(chat, user, message).catch((err) => console.error('[push]', err.message));
@@ -533,6 +561,7 @@ export async function forwardMessages(user, messageIds, toChatIds) {
     const chat = await requireMember(chatId, user.id);
     assertCanPost(chat);
     await assertDirectPeerActive(chat, user.id);
+    await revealChat(chatId);
     for (const { m, sender } of sources) {
       const { rows } = await query(
         `INSERT INTO messages (chat_id, sender_id, type, body, file_id, forwarded_from_id, forwarded_name)
@@ -570,6 +599,25 @@ export async function setPinned(user, messageId, pinned) {
   await toChat(m.chat_id, 'chat:pins', { chatId: m.chat_id });
 }
 
+/** "Seen by": for the sender of a group message, who has read it and when. */
+export async function messageReads(messageId, userId) {
+  const m = await assertVisibleMessage(messageId, userId);
+  if (m.sender_id !== userId) throw new HttpError(403, 'Only the sender can see who read a message.', 'FORBIDDEN');
+  const { rows } = await query(
+    `SELECT u.*, cm.last_read_id >= $2 AS has_read,
+            (SELECT min(r.read_at) FROM message_reads r
+              WHERE r.chat_id = cm.chat_id AND r.user_id = cm.user_id AND r.up_to_id >= $2) AS read_at
+       FROM chat_members cm JOIN users u ON u.id = cm.user_id
+      WHERE cm.chat_id = $1 AND cm.user_id <> $3 AND u.status <> 'removed'`,
+    [m.chat_id, messageId, userId],
+  );
+  const read = rows.filter((r) => r.has_read)
+    .map((r) => ({ user: publicUser(r), readAt: r.read_at }))
+    .sort((a, b) => new Date(b.readAt || 0) - new Date(a.readAt || 0));
+  const unread = rows.filter((r) => !r.has_read).map((r) => publicUser(r));
+  return { read, unread };
+}
+
 export async function listPins(chatId, userId) {
   await requireMember(chatId, userId);
   const { rows } = await query(
@@ -589,15 +637,22 @@ export async function listPins(chatId, userId) {
 export async function markReceipt(userId, chatId, { readId = 0, deliveredId = 0 }) {
   const upTo = Math.max(readId, deliveredId);
   const { rows } = await query(
-    `UPDATE chat_members cm
+    `WITH before AS (SELECT last_read_id FROM chat_members WHERE chat_id = $1 AND user_id = $2)
+     UPDATE chat_members cm
         SET last_read_id = greatest(cm.last_read_id, least($3::bigint, (SELECT coalesce(max(id), 0) FROM messages WHERE chat_id = $1))),
             last_delivered_id = greatest(cm.last_delivered_id, least($4::bigint, (SELECT coalesce(max(id), 0) FROM messages WHERE chat_id = $1)))
       WHERE cm.chat_id = $1 AND cm.user_id = $2
         AND (cm.last_read_id < $3 OR cm.last_delivered_id < $4)
-      RETURNING last_read_id, last_delivered_id`,
+      RETURNING last_read_id, last_delivered_id, (SELECT last_read_id FROM before) AS read_before`,
     [chatId, userId, readId, upTo],
   );
   if (!rows[0]) return null;
+  if (rows[0].last_read_id > rows[0].read_before) {
+    await query(
+      'INSERT INTO message_reads (chat_id, user_id, up_to_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+      [chatId, userId, rows[0].last_read_id],
+    );
+  }
   const receipt = { chatId, userId, readId: rows[0].last_read_id, deliveredId: rows[0].last_delivered_id };
   await toChat(chatId, 'receipt', receipt);
   return receipt;

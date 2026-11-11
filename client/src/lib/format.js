@@ -74,6 +74,10 @@ export function messagePreview(m, users = {}) {
 
 export function callText(meta = {}) {
   const v = meta.video;
+  if (meta.group) {
+    const name = t(v ? 'Group video call' : 'Group call');
+    return meta.status === 'completed' ? `${v ? '📹' : '📞'} ${name} (${duration(meta.durationSec)})` : `📵 ${t('Missed {call}', { call: name })}`;
+  }
   if (meta.status === 'completed') return `${v ? '📹' : '📞'} ${t(v ? 'Video call' : 'Call')} (${duration(meta.durationSec)})`;
   const label = { missed: 'Missed', declined: 'Declined' }[meta.status] || 'Cancelled';
   return `📵 ${t(`${label} ${v ? 'video call' : 'call'}`)}`;
@@ -92,6 +96,27 @@ export function systemText(m, users = {}) {
     case 'member_left': return t('{name} left the group', { name: nameOf(users, meta.userId) });
     case 'message_pinned': return t('{actor} pinned “{text}”', { actor, text: meta.preview || t('a message') });
     default: return t('Service message');
+  }
+}
+
+/** Center-crops a picture to a square JPEG, so profile photos stay small and any format works. */
+export async function cropToJpeg(file, size = 512) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error(t('That picture could not be read.')));
+      el.src = url;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    canvas.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+    return await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 

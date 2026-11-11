@@ -2,6 +2,7 @@ import webpush from 'web-push';
 import { config } from '../config.js';
 import { query } from '../db.js';
 import { isForeground } from '../realtime/bus.js';
+import { mentionedUsernames } from './mentions.js';
 
 export const pushEnabled = Boolean(config.push.publicKey && config.push.privateKey);
 if (pushEnabled) webpush.setVapidDetails(config.push.subject, config.push.publicKey, config.push.privateKey);
@@ -16,20 +17,35 @@ function preview(message) {
   return message.body.slice(0, 140);
 }
 
-/** Web Push for members who don't have the app on screen and haven't muted the chat. */
-export async function notifyNewMessage(chat, sender, message) {
-  if (!pushEnabled || message.type === 'system') return;
+/**
+ * Who gets a push for a new message: active members other than the sender who haven't muted the
+ * chat, plus anyone @mentioned in it, even if they muted the chat.
+ */
+export async function pushRecipients(chat, sender, message) {
+  if (message.type === 'system') return [];
+  const mentioned = chat.type === 'group' ? mentionedUsernames(message.body) : [];
   const { rows } = await query(
-    `SELECT cm.user_id FROM chat_members cm JOIN users u ON u.id = cm.user_id
-      WHERE cm.chat_id = $1 AND cm.user_id <> $2 AND NOT cm.muted AND u.status = 'active'`,
-    [chat.id, sender.id],
+    `SELECT cm.user_id, lower(u.username) = ANY($3::text[]) AS mentioned
+       FROM chat_members cm JOIN users u ON u.id = cm.user_id
+      WHERE cm.chat_id = $1 AND cm.user_id <> $2 AND u.status = 'active'
+        AND (NOT cm.muted OR lower(u.username) = ANY($3::text[]))`,
+    [chat.id, sender.id, mentioned],
   );
+  return rows.map((r) => ({ userId: r.user_id, mentioned: r.mentioned }));
+}
+
+/** Web Push for recipients who don't have the app on screen. */
+export async function notifyNewMessage(chat, sender, message) {
+  if (!pushEnabled) return;
+  const recipients = await pushRecipients(chat, sender, message);
   const title = chat.type === 'group' ? chat.title : sender.display_name;
-  const body = chat.type === 'group' ? `${sender.display_name}: ${preview(message)}` : preview(message);
-  for (const { user_id: uid } of rows) {
-    if (await isForeground(uid)) continue;
+  for (const { userId, mentioned } of recipients) {
+    if (await isForeground(userId)) continue;
+    const body = chat.type !== 'group' ? preview(message)
+      : mentioned ? `${sender.display_name} mentioned you: ${preview(message)}`
+        : `${sender.display_name}: ${preview(message)}`;
     // A tag per message: on iPhone, reusing a tag replaces the banner without alerting again.
-    await sendToUser(uid, { title, body, chatId: chat.id, messageId: message.id, tag: `msg-${message.id}` });
+    await sendToUser(userId, { title, body, chatId: chat.id, messageId: message.id, tag: `msg-${message.id}` });
   }
 }
 

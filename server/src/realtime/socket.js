@@ -6,6 +6,7 @@ import { getSessionUser, publicUser } from '../services/auth.js';
 import { markAllDelivered, markReceipt } from '../services/chats.js';
 import { broadcast, sessionRoom, setIo, userRoom } from './bus.js';
 import { registerCallHandlers } from './calls.js';
+import { registerGroupCallHandlers } from './groupCalls.js';
 
 /** Simple per-socket token bucket so a misbehaving client can't flood the server. */
 function rateLimiter(perSecond, burst) {
@@ -106,6 +107,7 @@ export async function createSocketServer(httpServer) {
     }));
 
     registerCallHandlers(io, socket, rateLimiter(50, 200));
+    registerGroupCallHandlers(io, socket, rateLimiter(100, 400));
 
     socket.on('disconnect', safe('disconnect', async () => {
       const stillOnline = (await io.in(userRoom(userId)).fetchSockets()).length > 0;

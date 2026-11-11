@@ -65,6 +65,12 @@ router.patch('/:id/settings', asyncH(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/** Deletes a private chat from this person's list (the other person keeps theirs). */
+router.post('/:id/hide', asyncH(async (req, res) => {
+  await chats.hideChat(idParam(req), req.user.id);
+  res.json({ ok: true });
+}));
+
 /** Clears history for the current user only. */
 router.post('/:id/clear', asyncH(async (req, res) => {
   const chatId = idParam(req);
@@ -152,6 +158,10 @@ messagesRouter.post('/forward', asyncH(async (req, res) => {
     req.body,
   );
   res.json({ messages: await chats.forwardMessages(req.user, messageIds, toChatIds) });
+}));
+
+messagesRouter.get('/:id/reads', asyncH(async (req, res) => {
+  res.json(await chats.messageReads(idParam(req), req.user.id));
 }));
 
 messagesRouter.patch('/:id', asyncH(async (req, res) => {

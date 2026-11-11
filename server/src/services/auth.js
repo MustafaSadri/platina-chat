@@ -45,16 +45,23 @@ export async function createSession(userId, { userAgent = '', ip = '' } = {}) {
  * Resolves a session token to an *active* user. Checked on every request and socket connection,
  * so deactivating or removing a user takes effect immediately.
  */
+const TOUCH_EVERY_MS = 5 * 60_000;
+
 export async function getSessionUser(token) {
   if (!token || typeof token !== 'string' || token.length > 100) return null;
   const { rows } = await query(
-    `UPDATE sessions s SET last_used_at = now()
-       FROM users u
-      WHERE s.token_hash = $1 AND s.expires_at > now() AND u.id = s.user_id AND u.status = 'active'
-      RETURNING s.id AS session_id, u.*`,
+    `SELECT s.id AS session_id, s.last_used_at AS session_used_at, u.*
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'active'`,
     [sha256(token)],
   );
-  return rows[0] || null;
+  const user = rows[0];
+  if (!user) return null;
+  // "Last active" for the sessions list only needs minute-level accuracy: write at most every 5 minutes.
+  if (Date.now() - new Date(user.session_used_at).getTime() > TOUCH_EVERY_MS) {
+    query('UPDATE sessions SET last_used_at = now() WHERE id = $1', [user.session_id]).catch(() => {});
+  }
+  return user;
 }
 
 export const deleteSession = (token) => query('DELETE FROM sessions WHERE token_hash = $1', [sha256(token)]);
@@ -80,6 +87,7 @@ export function publicUser(u) {
     role: u.role,
     status: u.status,
     avatarColor: u.avatar_color,
+    avatarUrl: u.avatar_key ? `/api/users/${u.id}/avatar?v=${u.avatar_key.slice(-10)}` : null,
     lastSeenAt: u.last_seen_at,
   };
 }

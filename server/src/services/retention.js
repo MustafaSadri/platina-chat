@@ -15,6 +15,7 @@ export async function runRetention() {
   const days = await getRetentionDays();
   if (!days) return { deletedMessages: 0, deletedFiles: 0 };
   const del = await query(`DELETE FROM messages WHERE created_at < now() - make_interval(days => $1)`, [days]);
+  await query(`DELETE FROM message_reads WHERE read_at < now() - make_interval(days => $1)`, [days]);
   const orphans = await query(
     `DELETE FROM files f WHERE f.created_at < now() - make_interval(days => $1)
         AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.file_id = f.id)

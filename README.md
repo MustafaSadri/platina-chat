@@ -20,7 +20,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and data model.
 | Status | Sent ✓ / delivered ✓✓ / read (blue ✓✓) receipts, online + "last seen", typing and "recording voice" indicators, unread counters |
 | Search | Global search (chats, people, messages) and in-chat search with jump-to-message |
 | Media | Images, videos, PDFs, documents, any file up to `MAX_UPLOAD_MB`; voice messages with waveform; drag & drop and paste |
-| Calls | 1:1 audio and video calls (WebRTC), mute/camera toggle, call log in chat |
+| Calls | 1:1 and group audio and video calls (WebRTC), mute/camera toggle, call log in chat |
 | Notifications | Sound + browser notifications; Web Push when the app is closed (needs VAPID keys) |
 | Languages | English and Russian interface (auto-detected, switchable, saved per account) |
 | Translation | Translate any text message EN⇄RU, per-chat automatic translation of incoming messages, translate your draft before sending |
@@ -29,7 +29,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and data model.
 
 ### Not included (be aware)
 
-- **Group calls** are not implemented — calls are 1:1 only.
+- **Group calls** connect every participant directly to every other one, so they're limited to
+  8 people, and quality depends on each person's upload speed.
+- **Answer and Decline buttons on call notifications** work on Android and desktop. iPhones don't
+  support notification buttons: tapping the notification opens the app on its Accept / Decline screen.
 - **No end-to-end encryption.** Traffic is encrypted in transit (HTTPS/WSS) and stored on your servers;
   the server can read messages. This is typical for business messengers with retention requirements.
 - **Translation sends message text to the provider you configure** (DeepL, Google or LibreTranslate).
@@ -37,7 +40,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and data model.
 - **Push notifications on iPhone** require iOS 16.4+ and the app added to the Home Screen.
 - **Calls can't ring like a phone call in a web app.** While a call rings, the app sends a notification
   every 7 seconds. A true full-screen ringing call on iPhone needs a native app (CallKit and VoIP push).
-- Avatars are coloured initials (no profile photo upload).
 
 ---
 
@@ -72,7 +74,7 @@ For frontend development with hot reload, run `npm run dev` (API on :3000) and `
 ### Tests
 
 ```bash
-npm test                         # 56 API/WebSocket integration tests against a real embedded PostgreSQL
+npm test                         # 70 API/WebSocket integration tests against a real embedded PostgreSQL
 node e2e/smoke.mjs <admin> <password> http://localhost:3000   # browser test (needs Chrome + running server)
 ```
 

@@ -71,19 +71,29 @@ function VoicePlayer({ file, mine }) {
   );
 }
 
+function UploadProgress({ progress = 0 }) {
+  return (
+    <span className="upload-progress">
+      <span className="spinner" />
+      <span>{Math.round(progress * 100)}%</span>
+    </span>
+  );
+}
+
 function Attachment({ file, mine, onOpenMedia }) {
   const t = useT();
   const src = file.localUrl || file.url;
   if (file.kind === 'image') {
     const ratio = file.width && file.height ? file.height / file.width : 0.75;
     return (
-      <button className="media" onClick={(e) => { e.stopPropagation(); onOpenMedia(file); }} style={{ aspectRatio: `${1 / Math.min(Math.max(ratio, 0.4), 1.6)}` }}>
+      <button className="media" onClick={(e) => { e.stopPropagation(); if (!file.uploading) onOpenMedia(file); }} style={{ aspectRatio: `${1 / Math.min(Math.max(ratio, 0.4), 1.6)}` }}>
         <img src={src} alt={file.name} loading="lazy" />
+        {file.uploading && <UploadProgress progress={file.progress} />}
       </button>
     );
   }
   if (file.kind === 'video') {
-    return <div className="media video"><video src={src} controls preload="metadata" playsInline /></div>;
+    return <div className="media video"><video src={src} controls={!file.uploading} preload="metadata" playsInline />{file.uploading && <UploadProgress progress={file.progress} />}</div>;
   }
   if (file.kind === 'voice') return <VoicePlayer file={file} mine={mine} />;
   if (file.kind === 'audio') {
@@ -130,7 +140,30 @@ function ReplyQuote({ reply, onJump }) {
   );
 }
 
-const renderText = (text) => linkify(text).map((p, i) => (typeof p === 'string' ? p : <a key={i} href={p.href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{p.href}</a>));
+const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
+
+/** Highlights @username for people the app knows; anything else stays plain text. */
+function withMentions(text, keyBase) {
+  const { users, me } = useStore.getState();
+  const byName = new Map(Object.values(users).filter((u) => u.username).map((u) => [u.username.toLowerCase(), u]));
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(/(^|[^\w@])@([a-zA-Z0-9._-]{3,32})/g)) {
+    const name = m[2].replace(/[.-]+$/, '');
+    const user = byName.get(name.toLowerCase());
+    if (!user) continue;
+    const start = m.index + m[1].length;
+    if (start > last) out.push(text.slice(last, start));
+    out.push(<span key={`${keyBase}-${start}`} className={`mention ${user.id === me?.id ? 'me' : ''}`} title={user.displayName}>@{name}</span>);
+    last = start + 1 + name.length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+const renderText = (text) => linkify(text).flatMap((p, i) => (typeof p === 'string'
+  ? withMentions(p, i)
+  : [<a key={i} href={p.href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{p.href}</a>]));
 
 function Translation({ m }) {
   const t = useT();
@@ -156,6 +189,7 @@ function Message({ m, chat, showName, showAvatar, onContext, onJump, onOpenMedia
   const sender = useStore((s) => s.users[m.senderId]);
   const translationEnabled = useStore((s) => s.config.translation);
   const longPress = useRef();
+  const pressStart = useRef({ x: 0, y: 0 });
   const mine = m.senderId === me.id;
 
   // Live translation: auto-translate incoming text into the language chosen for this chat.
@@ -176,20 +210,31 @@ function Message({ m, chat, showName, showAvatar, onContext, onJump, onOpenMedia
     ? { onClick: () => onSelect(m) }
     : {
       onContextMenu: (e) => { e.preventDefault(); onContext.open(e, m); },
+      // On phones a tap opens the message menu, like Telegram. Links, media and buttons keep their own taps.
+      onClick: (e) => {
+        if (!isTouch() || e.target.closest('a, button, audio, video, input, .reaction')) return;
+        onContext.open(e, m);
+      },
       onDoubleClick: () => !m.pending && onContext.reply(m),
       onTouchStart: (e) => {
         const p = e.touches[0];
+        pressStart.current = { x: p.clientX, y: p.clientY };
         longPress.current = setTimeout(() => { navigator.vibrate?.(10); onContext.open({ clientX: p.clientX, clientY: p.clientY }, m); }, 450);
       },
       onTouchEnd: () => clearTimeout(longPress.current),
-      onTouchMove: () => clearTimeout(longPress.current),
+      onTouchCancel: () => clearTimeout(longPress.current),
+      // A finger is never perfectly still, so only a real scroll cancels the press.
+      onTouchMove: (e) => {
+        const p = e.touches[0];
+        if (Math.hypot(p.clientX - pressStart.current.x, p.clientY - pressStart.current.y) > 10) clearTimeout(longPress.current);
+      },
     };
 
   return (
     <div id={`msg-${m.id}`} className={`msg-row ${mine ? 'mine' : ''} ${highlighted ? 'highlight' : ''} ${selected ? 'selected' : ''}`} {...handlers}>
       {selecting && <span className={`select-dot ${selected ? 'on' : ''}`}><Icon name="check" size={14} strokeWidth={3} /></span>}
       {chat.type === 'group' && !mine && (
-        <div className="msg-avatar">{showAvatar && <Avatar name={sender?.displayName} color={sender?.avatarColor} size={34} />}</div>
+        <div className="msg-avatar">{showAvatar && <Avatar name={sender?.displayName} color={sender?.avatarColor} src={sender?.avatarUrl} size={34} />}</div>
       )}
       <div className={`bubble ${mine ? 'out' : 'in'} ${onlyMedia ? 'media-only' : ''} ${showAvatar ? 'tail' : ''} ${m.type === 'call' ? 'call' : ''}`}>
         {showName && !mine && chat.type === 'group' && (
@@ -202,7 +247,7 @@ function Message({ m, chat, showName, showAvatar, onContext, onJump, onOpenMedia
           <div className="call-msg">
             <Icon name={m.meta?.video ? 'video' : 'phone'} size={20} />
             <div>
-              <div className="strong">{t(mine ? 'Outgoing' : 'Incoming')} {t(m.meta?.video ? 'video call' : 'call')}</div>
+              <div className="strong">{m.meta?.group ? t(m.meta.video ? 'Group video call' : 'Group call') : `${t(mine ? 'Outgoing' : 'Incoming')} ${t(m.meta?.video ? 'video call' : 'call')}`}</div>
               <div className={`small ${m.meta?.status === 'completed' ? 'muted' : 'danger-text'}`}>{callText(m.meta).replace(/^\S+\s/, '')}</div>
             </div>
           </div>
@@ -216,7 +261,7 @@ function Message({ m, chat, showName, showAvatar, onContext, onJump, onOpenMedia
         </span>
         {m.failed && (
           <div className="failed-actions">
-            <button onClick={(e) => { e.stopPropagation(); useStore.getState().deliverPending(chat.id, m); }}>{t('Retry')}</button>
+            <button onClick={(e) => { e.stopPropagation(); useStore.getState().retryMessage(chat.id, m); }}>{t('Retry')}</button>
             <button onClick={(e) => { e.stopPropagation(); useStore.getState().discardPending(chat.id, m.clientId); }}>{t('Delete')}</button>
           </div>
         )}

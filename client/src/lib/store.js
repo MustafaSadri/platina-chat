@@ -28,6 +28,9 @@ function mergeMessages(list = [], incoming) {
   return [...confirmed, ...pending];
 }
 
+// The original file of each unsent upload, so Retry can upload it again.
+const sourceFiles = new Map(); // clientId -> { file, kind, fields, caption, replyTo }
+
 function loadTheme() {
   try { return localStorage.getItem('theme') || 'system'; } catch { return 'system'; }
 }
@@ -41,6 +44,7 @@ export const useStore = create((set, get) => ({
   messages: {},
   hasMore: {},
   typing: {},
+  groupCalls: {}, // chatId -> running group call
   activeChatId: null,
   connected: false,
   theme: loadTheme(),
@@ -141,6 +145,17 @@ export const useStore = create((set, get) => ({
       const users = { ...s.users };
       for (const u of list) users[u.id] = { ...users[u.id], ...u };
       return { users };
+    });
+  },
+
+  setGroupCall(call) {
+    set((s) => ({ groupCalls: { ...s.groupCalls, [call.chatId]: call } }));
+  },
+  removeGroupCall(chatId) {
+    set((s) => {
+      const groupCalls = { ...s.groupCalls };
+      delete groupCalls[chatId];
+      return { groupCalls };
     });
   },
 
@@ -340,26 +355,46 @@ export const useStore = create((set, get) => ({
       file: tempFile, replyTo: replyTo ? { id: replyTo.id, senderId: replyTo.senderId, body: replyTo.body, type: replyTo.type } : null,
       createdAt: new Date().toISOString(), reactions: [], pending: true,
     };
+    sourceFiles.set(clientId, { file, kind, fields, caption, replyTo });
+    set((s) => ({ messages: { ...s.messages, [chatId]: mergeMessages(s.messages[chatId], [temp]) } }));
+    return get().uploadPending(chatId, clientId);
+  },
+
+  /** Uploads (or re-uploads, for Retry) a pending file with a progress bar, then sends it. */
+  async uploadPending(chatId, clientId) {
+    const source = sourceFiles.get(clientId);
+    if (!source) return null;
+    const { file, kind, fields, caption, replyTo } = source;
     const patchTemp = (fn) => set((s) => ({
       messages: { ...s.messages, [chatId]: (s.messages[chatId] || []).map((m) => (m.clientId === clientId && m.pending ? fn(m) : m)) },
     }));
-    set((s) => ({ messages: { ...s.messages, [chatId]: mergeMessages(s.messages[chatId], [temp]) } }));
+    patchTemp((m) => ({ ...m, failed: false, retrying: false, error: null, file: { ...m.file, uploading: true, progress: 0 } }));
     try {
       const uploaded = await api.upload(chatId, file, { kind, ...fields }, (p) => patchTemp((m) => ({ ...m, file: { ...m.file, progress: p } })));
-      patchTemp((m) => ({ ...m, file: { ...uploaded, localUrl }, payload: { body: caption, fileId: uploaded.id, clientId, ...(replyTo && { replyToId: replyTo.id }), ...(kind === 'voice' && { type: 'voice' }) } }));
+      patchTemp((m) => ({ ...m, file: { ...uploaded, localUrl: m.file.localUrl }, payload: { body: caption, fileId: uploaded.id, clientId, ...(replyTo && { replyToId: replyTo.id }), ...(kind === 'voice' && { type: 'voice' }) } }));
       const pending = get().messages[chatId].find((m) => m.clientId === clientId && m.pending);
       return await get().deliverPending(chatId, pending);
     } catch (err) {
-      patchTemp((m) => ({ ...m, failed: true, file: { ...m.file, uploading: false } }));
-      get().showToast(err, 'error');
+      // Lost connection: retried automatically on reconnect. Anything else waits for Retry.
+      const offline = err.status === 0;
+      patchTemp((m) => ({ ...m, failed: !offline, retrying: offline, file: { ...m.file, uploading: false } }));
+      if (!offline) get().showToast(err, 'error');
       return null;
     }
+  },
+
+  /** The Retry button: upload again if the file never arrived, otherwise resend the message. */
+  retryMessage(chatId, m) {
+    if (!m.payload) return get().uploadPending(chatId, m.clientId);
+    set((s) => ({ messages: { ...s.messages, [chatId]: (s.messages[chatId] || []).map((x) => (x.clientId === m.clientId && x.pending ? { ...x, failed: false, retrying: false, error: null } : x)) } }));
+    return get().deliverPending(chatId, m);
   },
 
   async deliverPending(chatId, temp) {
     if (!temp.payload) return null; // upload never finished; user must resend the file
     try {
       const { message } = await api.post(`/chats/${chatId}/messages`, temp.payload);
+      sourceFiles.delete(temp.clientId);
       get().receiveMessage(message);
       return message;
     } catch (err) {
@@ -376,7 +411,7 @@ export const useStore = create((set, get) => ({
   retryPending() {
     const { messages } = get();
     for (const [chatId, list] of Object.entries(messages)) {
-      for (const m of list) if (m.pending && (m.retrying || m.failed)) get().deliverPending(Number(chatId), m);
+      for (const m of list) if (m.pending && (m.retrying || m.failed)) get().retryMessage(Number(chatId), m);
     }
   },
 
@@ -403,6 +438,7 @@ export const useStore = create((set, get) => ({
   },
 
   discardPending(chatId, clientId) {
+    sourceFiles.delete(clientId);
     set((s) => ({ messages: { ...s.messages, [chatId]: (s.messages[chatId] || []).filter((m) => !(m.pending && m.clientId === clientId)) } }));
   },
 }));

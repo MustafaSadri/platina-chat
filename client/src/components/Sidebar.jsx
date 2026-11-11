@@ -31,6 +31,7 @@ function ChatItem({ chat, active, onContext }) {
   const isTyping = useStore((s) => typingIds(s.typing[chat.id]).length > 0);
   const m = chat.lastMessage;
   const longPress = useRef();
+  const pressStart = useRef({ x: 0, y: 0 });
   let prefix = '';
   if (m && m.type !== 'system' && m.type !== 'call') {
     if (m.senderId === me.id) prefix = t('You: ');
@@ -41,11 +42,19 @@ function ChatItem({ chat, active, onContext }) {
       className={`chat-item ${active ? 'active' : ''}`}
       onClick={() => useStore.getState().openChat(chat.id)}
       onContextMenu={(e) => { e.preventDefault(); onContext(e, chat); }}
-      onTouchStart={(e) => { const p = e.touches[0]; longPress.current = setTimeout(() => onContext({ clientX: p.clientX, clientY: p.clientY }, chat), 550); }}
+      onTouchStart={(e) => {
+        const p = e.touches[0];
+        pressStart.current = { x: p.clientX, y: p.clientY };
+        longPress.current = setTimeout(() => onContext({ clientX: p.clientX, clientY: p.clientY }, chat), 500);
+      }}
       onTouchEnd={() => clearTimeout(longPress.current)}
-      onTouchMove={() => clearTimeout(longPress.current)}
+      onTouchCancel={() => clearTimeout(longPress.current)}
+      onTouchMove={(e) => {
+        const p = e.touches[0];
+        if (Math.hypot(p.clientX - pressStart.current.x, p.clientY - pressStart.current.y) > 10) clearTimeout(longPress.current);
+      }}
     >
-      <Avatar name={chat.title} color={chat.avatarColor} online={online} group={chat.type === 'group'} />
+      <Avatar name={chat.title} color={chat.avatarColor} src={chat.avatarUrl} online={online} group={chat.type === 'group'} />
       <div className="chat-item-body">
         <div className="row">
           <span className="chat-item-title">
@@ -109,14 +118,14 @@ function SearchResults({ q }) {
       {chatHits.length > 0 && <div className="section-title">{t('Chats')}</div>}
       {chatHits.map((c) => (
         <button key={c.id} className="chat-item compact" onClick={() => useStore.getState().openChat(c.id)}>
-          <Avatar name={c.title} color={c.avatarColor} size={40} group={c.type === 'group'} />
+          <Avatar name={c.title} color={c.avatarColor} src={c.avatarUrl} size={40} group={c.type === 'group'} />
           <div className="chat-item-body"><span className="chat-item-title">{c.title}</span></div>
         </button>
       ))}
       {people.length > 0 && <div className="section-title">{t('People')}</div>}
       {people.slice(0, 20).map((u) => (
         <button key={u.id} className="chat-item compact" onClick={() => openDirect(u)}>
-          <Avatar name={u.displayName} color={u.avatarColor} size={40} />
+          <Avatar name={u.displayName} color={u.avatarColor} src={u.avatarUrl} size={40} />
           <div className="chat-item-body">
             <span className="chat-item-title">{u.displayName}</span>
             <span className="chat-item-preview">@{u.username}{u.title ? ` · ${u.title}` : ''}</span>
@@ -131,7 +140,7 @@ function SearchResults({ q }) {
         if (!chat) return null;
         return (
           <button key={m.id} className="chat-item" onClick={() => useStore.getState().openChat(m.chatId, { jumpTo: m.id })}>
-            <Avatar name={chat.title} color={chat.avatarColor} size={44} group={chat.type === 'group'} />
+            <Avatar name={chat.title} color={chat.avatarColor} src={chat.avatarUrl} size={44} group={chat.type === 'group'} />
             <div className="chat-item-body">
               <div className="row">
                 <span className="chat-item-title">{chat.title}</span>
@@ -182,6 +191,26 @@ export default function Sidebar() {
     } catch (err) { useStore.getState().showToast(err, 'error'); }
   };
 
+  function deleteChatItem(chat) {
+    if (chat.type !== 'direct') return null;
+    const status = (chat.peer && useStore.getState().users[chat.peer.id]?.status) || chat.peer?.status;
+    const inactive = status && status !== 'active';
+    const label = t(inactive ? 'Delete user for me' : 'Delete chat for me');
+    return {
+      icon: 'trash',
+      label,
+      danger: true,
+      onClick: () => open({
+        type: 'confirm',
+        title: label,
+        text: t('Remove {title} from your chat list? The history is cleared for you only. Other people keep their copy.', { title: chat.title }),
+        confirm: t('Delete'),
+        danger: true,
+        onConfirm: () => api.post(`/chats/${chat.id}/hide`),
+      }),
+    };
+  }
+
   function chatMenu(e, chat) {
     ctx.open(e, [
       { icon: 'pin', label: t(chat.pinned ? 'Unpin' : 'Pin to top'), onClick: () => setSetting(chat, { pinned: !chat.pinned }) },
@@ -189,6 +218,7 @@ export default function Sidebar() {
       { icon: 'archive', label: t(chat.archived ? 'Unarchive' : 'Archive'), onClick: () => setSetting(chat, { archived: !chat.archived }, t(chat.archived ? 'Chat unarchived' : 'Chat archived')) },
       { icon: 'check', label: t('Mark as read'), onClick: () => useStore.getState().markRead(chat.id) },
       { icon: 'trash', label: t('Clear history (for me)'), danger: true, onClick: () => open({ type: 'confirm', title: t('Clear history'), text: t('Clear the history of “{title}” for you? Other members keep their copy.', { title: chat.title }), confirm: t('Clear'), danger: true, onConfirm: () => api.post(`/chats/${chat.id}/clear`).then(() => useStore.getState().loadMessages(chat.id, { reset: true })) }) },
+      deleteChatItem(chat),
       chat.type === 'group' && { icon: 'logout', label: t('Leave group'), danger: true, onClick: () => open({ type: 'confirm', title: t('Leave group'), text: t('Leave “{title}”?', { title: chat.title }), confirm: t('Leave'), danger: true, onConfirm: () => api.del(`/chats/${chat.id}/members/${me.id}`) }) },
     ].filter(Boolean));
   }
@@ -217,7 +247,7 @@ export default function Sidebar() {
           <div className="menu-backdrop" onClick={() => setMenu(false)} />
           <div className="drawer" onClick={() => setMenu(false)}>
             <div className="drawer-me">
-              <Avatar name={me.displayName} color={me.avatarColor} size={56} />
+              <Avatar name={me.displayName} color={me.avatarColor} src={me.avatarUrl} size={56} />
               <div>
                 <div className="strong">{me.displayName}</div>
                 <div className="muted small">@{me.username}{me.title ? ` · ${me.title}` : ''}</div>

@@ -27,7 +27,8 @@ export function playChime() {
 export function notifyMessage(m) {
   const s = useStore.getState();
   const chat = s.chats[m.chatId];
-  if (!chat || chat.muted || m.type === 'system') return;
+  const mentionsMe = s.me?.username && new RegExp(`(^|[^\\w@])@${s.me.username.replace(/[.]/g, '\\.')}(?![\\w])`, 'i').test(m.body || '');
+  if (!chat || (chat.muted && !mentionsMe) || m.type === 'system') return;
   const viewing = s.activeChatId === m.chatId && document.visibilityState === 'visible' && document.hasFocus();
   if (viewing) return;
   playChime();

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import * as api from '../lib/api.js';
+import { cropToJpeg, dayLabel, timeOf } from '../lib/format.js';
 import { useStore } from '../lib/store.js';
 import { disableNotifications, enableNotifications, isIos, notificationStatus, unsubscribePush } from '../lib/notify.js';
 import { disconnectSocket } from '../lib/socket.js';
@@ -41,7 +42,7 @@ export function UserPicker({ selected, onToggle, exclude = [], single = false, o
         {list.map((u) => (
           <button key={u.id} className="member-row" onClick={() => (single ? onPick(u) : onToggle(u.id))}>
             {!single && <span className={`select-dot ${selected.includes(u.id) ? 'on' : ''}`}><Icon name="check" size={14} strokeWidth={3} /></span>}
-            <Avatar name={u.displayName} color={u.avatarColor} size={40} online={online.has(u.id)} />
+            <Avatar name={u.displayName} color={u.avatarColor} src={u.avatarUrl} size={40} online={online.has(u.id)} />
             <div className="grow left">
               <div>{u.displayName}</div>
               <div className="muted small">@{u.username}{u.title ? ` · ${u.title}` : ''}</div>
@@ -175,7 +176,7 @@ function Forward({ modal, close }) {
       <div className="picker-list">
         {list.map((c) => (
           <button key={c.id} className="member-row" onClick={() => send(c)}>
-            <Avatar name={c.title} color={c.avatarColor} size={40} group={c.type === 'group'} />
+            <Avatar name={c.title} color={c.avatarColor} src={c.avatarUrl} size={40} group={c.type === 'group'} />
             <div className="grow left">{c.title}</div>
           </button>
         ))}
@@ -186,25 +187,25 @@ function Forward({ modal, close }) {
 
 function DeleteMessages({ modal, close }) {
   const t = useT();
-  const [everyone, setEveryone] = useState(true);
   const n = modal.messages.length;
-  async function go() {
+  async function go(everyone) {
     const s = useStore.getState();
     for (const m of modal.messages) {
       try {
-        await api.del(`/messages/${m.id}${modal.canEveryone && everyone ? '?forEveryone=1' : ''}`);
+        await api.del(`/messages/${m.id}${everyone ? '?forEveryone=1' : ''}`);
       } catch (err) { s.showToast(err, 'error'); break; }
     }
     modal.onDone?.();
     close();
   }
   return (
-    <Modal title={n > 1 ? t('Delete {n} messages', { n }) : t('Delete message')} onClose={close}
-      footer={<><button className="btn ghost" onClick={close}>{t('Cancel')}</button><button className="btn danger" onClick={go}>{t('Delete')}</button></>}>
+    <Modal title={n > 1 ? t('Delete {n} messages', { n }) : t('Delete message')} onClose={close}>
       <p>{t(n > 1 ? 'Are you sure you want to delete these messages?' : 'Are you sure you want to delete this message?')}</p>
-      {modal.canEveryone && (
-        <label className="check"><input type="checkbox" checked={everyone} onChange={(e) => setEveryone(e.target.checked)} /> {t('Also delete for everyone')}</label>
-      )}
+      <div className="delete-choices">
+        {modal.canEveryone && <button className="btn danger block" onClick={() => go(true)}>{t('Delete for everyone')}</button>}
+        <button className={`btn block ${modal.canEveryone ? 'ghost danger' : 'danger'}`} onClick={() => go(false)}>{t('Delete for me')}</button>
+        <button className="btn ghost block" onClick={close}>{t('Cancel')}</button>
+      </div>
       <p className="muted small">{t('Deleted messages are hidden from the chat. Your organisation may retain a copy according to its retention policy.')}</p>
     </Modal>
   );
@@ -223,6 +224,78 @@ function Confirm({ modal, close }) {
     </>}>
       <p>{modal.text}</p>
     </Modal>
+  );
+}
+
+function AvatarPicker({ me }) {
+  const t = useT();
+  const input = useRef();
+  const [busy, setBusy] = useState(false);
+  const save = async (work) => {
+    setBusy(true);
+    try {
+      const { user } = await work();
+      useStore.getState().setMe(user);
+    } catch (err) { useStore.getState().showToast(err, 'error'); }
+    setBusy(false);
+  };
+  const choose = (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    save(async () => {
+      const fd = new FormData();
+      fd.append('file', await cropToJpeg(file), 'avatar.jpg');
+      return api.api('POST', '/profile/avatar', fd);
+    });
+  };
+  return (
+    <div className="avatar-picker">
+      <button className="avatar-edit" onClick={() => input.current.click()} disabled={busy} aria-label={t('Change profile photo')}>
+        <Avatar name={me.displayName} color={me.avatarColor} src={me.avatarUrl} size={72} />
+        <span className="avatar-edit-badge">{busy ? <span className="spinner small" /> : <Icon name="edit" size={13} />}</span>
+      </button>
+      <input ref={input} type="file" accept="image/*" hidden onChange={choose} />
+      {me.avatarUrl && <button className="link-btn small" disabled={busy} onClick={() => save(() => api.del('/profile/avatar'))}>{t('Remove photo')}</button>}
+    </div>
+  );
+}
+
+function DisplayName({ me }) {
+  const t = useT();
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  if (draft === null) {
+    return (
+      <button className="name-edit" onClick={() => setDraft(me.displayName)} aria-label={t('Change display name')}>
+        <span className="info-title">{me.displayName}</span> <Icon name="edit" size={15} className="muted-icon" />
+      </button>
+    );
+  }
+  async function save(e) {
+    e.preventDefault();
+    const displayName = draft.trim();
+    if (!displayName) return;
+    if (displayName !== me.displayName) {
+      setBusy(true);
+      try {
+        const { user } = await api.patch('/profile', { displayName });
+        useStore.getState().setMe(user);
+      } catch (err) {
+        useStore.getState().showToast(err, 'error');
+        setBusy(false);
+        return;
+      }
+      setBusy(false);
+    }
+    setDraft(null);
+  }
+  return (
+    <form className="name-form" onSubmit={save}>
+      <input autoFocus required maxLength={64} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={t('Display name')} />
+      <button className="btn primary small" disabled={busy}>{t('Save')}</button>
+      <button type="button" className="btn ghost small" onClick={() => setDraft(null)}>{t('Cancel')}</button>
+    </form>
   );
 }
 
@@ -318,9 +391,9 @@ function Settings({ close }) {
   return (
     <Modal title={t('Settings')} onClose={close}>
       <div className="settings-me">
-        <Avatar name={me.displayName} color={me.avatarColor} size={72} />
+        <AvatarPicker me={me} />
         <div>
-          <div className="info-title">{me.displayName}</div>
+          <DisplayName me={me} />
           <div className="muted">@{me.username}{me.title ? ` · ${me.title}` : ''}</div>
           {me.role === 'admin' && <span className="role-tag">{t('administrator')}</span>}
         </div>
@@ -363,13 +436,43 @@ function Compose({ close }) {
   );
 }
 
+function SeenBy({ modal, close }) {
+  const t = useT();
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    api.get(`/messages/${modal.message.id}/reads`).then(setData).catch((err) => { useStore.getState().showToast(err, 'error'); close(); });
+  }, [modal.message.id]);
+  const when = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const today = new Date().toDateString() === d.toDateString();
+    return today ? timeOf(iso) : `${dayLabel(iso)}, ${timeOf(iso)}`;
+  };
+  return (
+    <Modal title={t('Seen by')} onClose={close}>
+      {!data && <div className="center pad"><span className="spinner" /></div>}
+      {data && !data.read.length && <p className="muted">{t('Nobody has read this message yet.')}</p>}
+      {data?.read.map(({ user, readAt }) => (
+        <div key={user.id} className="member-row static">
+          <Avatar name={user.displayName} color={user.avatarColor} src={user.avatarUrl} size={40} />
+          <span className="grow left ellipsis">{user.displayName}</span>
+          <span className="muted small nowrap"><Icon name="checks" size={14} /> {when(readAt)}</span>
+        </div>
+      ))}
+      {data?.unread.length > 0 && (
+        <p className="muted small pad">{t('Not read yet: {names}', { names: data.unread.map((u) => u.displayName).join(', ') })}</p>
+      )}
+    </Modal>
+  );
+}
+
 export default function Modals() {
   const modal = useStore((s) => s.modal);
   if (!modal) return null;
   const close = () => useStore.getState().closeModal();
   const C = {
     newChat: NewChat, newGroup: NewGroup, addMembers: AddMembers, memberActions: MemberActions, forward: Forward,
-    delete: DeleteMessages, confirm: Confirm, settings: Settings, compose: Compose, admin: AdminPanel,
+    delete: DeleteMessages, seenBy: SeenBy, confirm: Confirm, settings: Settings, compose: Compose, admin: AdminPanel,
   }[modal.type];
   return C ? <C modal={modal} close={close} /> : null;
 }

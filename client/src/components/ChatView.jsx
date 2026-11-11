@@ -3,6 +3,7 @@ import * as api from '../lib/api.js';
 import { useStore } from '../lib/store.js';
 import { dayLabel, isSameDay, lastSeen, messagePreview } from '../lib/format.js';
 import { startCall } from '../lib/call.js';
+import { joinGroupCall, startGroupCall, useGroupCall } from '../lib/groupCall.js';
 import Avatar from './Avatar.jsx';
 import Icon from './Icons.jsx';
 import Message from './Message.jsx';
@@ -33,7 +34,7 @@ function ChatHeader({ chat, onSearch }) {
     <header className="chat-header">
       <button className="icon-btn back-btn" onClick={() => useStore.getState().openChat(null)} aria-label={t('Back')}><Icon name="back" /></button>
       <button className="chat-header-main" onClick={toggleInfo}>
-        <Avatar name={chat.title} color={chat.avatarColor} size={42} group={chat.type === 'group'} />
+        <Avatar name={chat.title} color={chat.avatarColor} src={chat.avatarUrl} size={42} group={chat.type === 'group'} />
         <div className="chat-header-text">
           <div className="chat-title">{chat.title}</div>
           <div className={`chat-status ${online && !typing ? 'online' : ''}`}>{status}</div>
@@ -42,10 +43,29 @@ function ChatHeader({ chat, onSearch }) {
       <div className="chat-actions">
         <button className="icon-btn" onClick={onSearch} aria-label="Search in chat"><Icon name="search" /></button>
         {canCall && <button className="icon-btn" onClick={() => startCall(chat, false)} aria-label="Voice call" title={t('Call')}><Icon name="phone" /></button>}
-        {canCall && <button className="icon-btn hide-phone" onClick={() => startCall(chat, true)} aria-label="Video call" title={t('Video call')}><Icon name="video" /></button>}
+        {canCall && <button className="icon-btn" onClick={() => startCall(chat, true)} aria-label="Video call" title={t('Video call')}><Icon name="video" /></button>}
+        {chat.type === 'group' && <button className="icon-btn" onClick={() => startGroupCall(chat, false)} aria-label="Group voice call" title={t('Group call')}><Icon name="phone" /></button>}
+        {chat.type === 'group' && <button className="icon-btn" onClick={() => startGroupCall(chat, true)} aria-label="Group video call" title={t('Group video call')}><Icon name="video" /></button>}
         <button className="icon-btn" onClick={toggleInfo} aria-label="Chat info"><Icon name="info" /></button>
       </div>
     </header>
+  );
+}
+
+function GroupCallBar({ chatId }) {
+  const t = useT();
+  const call = useStore((s) => s.groupCalls[chatId]);
+  const mine = useGroupCall((s) => s.callId);
+  if (!call || call.callId === mine) return null;
+  return (
+    <div className="group-call-bar">
+      <Icon name={call.video ? 'video' : 'phone'} className="accent" />
+      <div className="grow">
+        <div className="small strong">{t(call.video ? 'Group video call' : 'Group call')}</div>
+        <div className="small muted">{t('{n} in the call', { n: call.participantIds.length })}</div>
+      </div>
+      <button className="btn primary small" onClick={() => joinGroupCall(call)}>{t('Join')}</button>
+    </div>
   );
 }
 
@@ -113,6 +133,7 @@ function MediaViewer({ file, onClose }) {
   return (
     <div className="viewer" onClick={onClose}>
       <div className="viewer-bar" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn light" onClick={onClose} aria-label="Back"><Icon name="back" /></button>
         <span className="ellipsis">{file.name}</span>
         <a className="icon-btn light" href={`${file.url}?download=1`} download={file.name} aria-label="Download"><Icon name="download" /></a>
         <button className="icon-btn light" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
@@ -236,6 +257,7 @@ export default function ChatView({ chatId }) {
         m.body && { icon: 'copy', label: tr('Copy text'), onClick: () => navigator.clipboard?.writeText(m.body).then(() => s.showToast(tr('Copied to clipboard')), () => s.showToast(tr('Copy is not allowed here'), 'error')) },
         m.file && { icon: 'download', label: tr('Download'), onClick: () => { const a = document.createElement('a'); a.href = `${m.file.url}?download=1`; a.download = m.file.name; a.click(); } },
         m.type !== 'call' && { icon: 'forward', label: tr('Forward'), onClick: () => s.openModal({ type: 'forward', messageIds: [m.id] }) },
+        mine && c.type === 'group' && !['system', 'call'].includes(m.type) && { icon: 'checks', label: tr('Seen by'), onClick: () => s.openModal({ type: 'seenBy', message: m }) },
         canPin && { icon: 'pin', label: tr('Pin'), onClick: () => api.post(`/messages/${m.id}/pin`).catch((err) => s.showToast(err, 'error')) },
         { icon: 'check', label: tr('Select'), onClick: () => setSelection(new Set([m.id])) },
         { icon: 'trash', label: tr('Delete'), danger: true, onClick: () => s.openModal({ type: 'delete', messages: [m], canEveryone: mine || canModerate }) },
@@ -286,6 +308,7 @@ export default function ChatView({ chatId }) {
         </header>
       ) : searching ? <SearchBar chatId={chatId} onClose={() => setSearching(false)} onJump={jump} />
         : <ChatHeader chat={chat} onSearch={() => setSearching(true)} />}
+      <GroupCallBar chatId={chatId} />
       <PinnedBar chatId={chatId} onJump={jump} />
 
       <div className="messages" ref={scroller} onScroll={onScroll}>

@@ -75,7 +75,7 @@ export default function ChatInfo({ chatId }) {
       </header>
       <div className="info-scroll">
         <div className="info-hero">
-          <Avatar name={chat.title} color={chat.avatarColor} size={96} group={isGroup} />
+          <Avatar name={chat.title} color={chat.avatarColor} src={chat.avatarUrl} size={96} group={isGroup} />
           <div className="info-title">{chat.title}</div>
           <div className="muted small">
             {isGroup ? t('members', { n: chat.memberCount }) : lastSeen(useStore.getState().users[chat.peer?.id], online.has(chat.peer?.id))}
@@ -138,7 +138,7 @@ export default function ChatInfo({ chatId }) {
             </div>
             {details.members.map((m) => (
               <button key={m.id} className="member-row" onClick={() => memberMenu(m)}>
-                <Avatar name={m.displayName} color={m.avatarColor} size={40} online={online.has(m.id)} />
+                <Avatar name={m.displayName} color={m.avatarColor} src={m.avatarUrl} size={40} online={online.has(m.id)} />
                 <div className="grow left">
                   <div>{m.displayName}{m.id === me.id && <span className="muted"> {t('(you)')}</span>}</div>
                   <div className={`small ${online.has(m.id) ? 'accent' : 'muted'}`}>{lastSeen(m, online.has(m.id))}</div>

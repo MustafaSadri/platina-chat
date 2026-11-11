@@ -3,12 +3,13 @@ import * as api from './api.js';
 import { getSocket } from './socket.js';
 import { useStore } from './store.js';
 import { t } from './i18n.js';
+import { setSpeaker } from './audioRoute.js';
 
 // 1:1 WebRTC calls. Signaling goes through Socket.IO; media flows peer-to-peer (or via TURN).
 const idle = {
   status: 'idle', // idle | outgoing | incoming | connecting | active
   callId: null, chatId: null, peer: null, video: false,
-  localStream: null, remoteStream: null, micOff: false, camOff: false, startedAt: null, error: null,
+  localStream: null, remoteStream: null, micOff: false, camOff: false, speaker: true, startedAt: null, error: null,
 };
 
 export const useCall = create(() => ({ ...idle }));
@@ -18,7 +19,7 @@ let pendingCandidates = [];
 let ringTimer = null;
 let ringCtx = null;
 
-function ring(on) {
+export function ring(on) {
   clearInterval(ringTimer);
   ringTimer = null;
   if (!on) return;
@@ -40,7 +41,7 @@ function ring(on) {
   ringTimer = setInterval(beep, 2500);
 }
 
-async function getMedia(video) {
+export async function getMedia(video) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('Calls need a secure (HTTPS) connection and a browser with camera/microphone support.');
   return navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -55,7 +56,7 @@ let connectTimer = null;
 let attempt = 0;
 const stopTracks = (stream) => stream?.getTracks().forEach((track) => track.stop());
 
-function clearCallNotifications() {
+export function clearCallNotifications() {
   navigator.serviceWorker?.getRegistration()
     .then((reg) => reg?.getNotifications())
     .then((list) => list?.filter((n) => n.tag?.startsWith('call-')).forEach((n) => n.close()))
@@ -103,6 +104,7 @@ async function createPeer(callId, stream) {
 
 function cleanup() {
   attempt += 1;
+  setSpeaker(true);
   clearCallNotifications();
   ring(false);
   clearTimeout(connectTimer);
@@ -189,6 +191,12 @@ export function hangUp() {
   cleanup();
 }
 
+export function toggleSpeaker() {
+  const speaker = !useCall.getState().speaker;
+  setSpeaker(speaker);
+  useCall.setState({ speaker });
+}
+
 export function toggleMic() {
   const { localStream, micOff } = useCall.getState();
   localStream?.getAudioTracks().forEach((t) => { t.enabled = micOff; });
@@ -234,6 +242,21 @@ async function onSignal({ callId, data }) {
   }
 }
 
+// The notification's Answer button: answer as soon as this call reaches the app.
+let pendingAnswer = null;
+
+export function takePendingAnswer(callId) {
+  if (pendingAnswer !== callId) return false;
+  pendingAnswer = null;
+  return true;
+}
+
+export function requestAnswer(callId) {
+  pendingAnswer = callId;
+  const st = useCall.getState();
+  if (st.status === 'incoming' && takePendingAnswer(st.callId)) acceptCall();
+}
+
 /** After the socket reconnects: reattach to the running call, or close it if it's over. */
 export async function rejoinCall() {
   const { callId, status } = useCall.getState();
@@ -254,6 +277,10 @@ export async function handleCallEvent(event, data) {
     if (st.status !== 'idle') return; // already on this or another call; ignore repeats
     useCall.setState({ ...idle, status: 'incoming', callId: data.callId, chatId: data.chatId, peer: data.from, video: data.video });
     ring(true);
+    if (takePendingAnswer(data.callId)) {
+      acceptCall();
+      return;
+    }
     // With Web Push the server notifies hidden devices; this covers servers without it.
     if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted' && !useStore.getState().config.vapidPublicKey) {
       navigator.serviceWorker?.getRegistration().then((reg) => reg?.showNotification(data.from.displayName, {

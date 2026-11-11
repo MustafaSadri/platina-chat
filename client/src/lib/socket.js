@@ -2,6 +2,7 @@ import { io } from 'socket.io-client';
 import { useStore } from './store.js';
 import { notifyMessage } from './notify.js';
 import { handleCallEvent, rejoinCall } from './call.js';
+import { handleGroupCallEvent, rejoinGroupCall } from './groupCall.js';
 
 let socket = null;
 
@@ -25,10 +26,11 @@ export function connectSocket() {
   let firstConnect = true;
 
   socket.on('connect', () => {
-    useStore.setState({ connected: true });
+    useStore.setState({ connected: true, groupCalls: {} }); // the server re-sends running calls
     if (!firstConnect) {
       s().resync().catch(() => {});
       rejoinCall();
+      rejoinGroupCall();
     }
     firstConnect = false;
   });
@@ -60,6 +62,9 @@ export function connectSocket() {
 
   for (const ev of ['call:incoming', 'call:accepted', 'call:signal', 'call:ended']) {
     socket.on(ev, (data) => handleCallEvent(ev, data));
+  }
+  for (const ev of ['group-call:ringing', 'group-call:update', 'group-call:peer-joined', 'group-call:peer-left', 'group-call:signal', 'group-call:ended']) {
+    socket.on(ev, (data) => handleGroupCallEvent(ev, data));
   }
   return socket;
 }

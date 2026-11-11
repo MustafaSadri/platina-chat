@@ -109,7 +109,7 @@ function Users() {
       <div className="admin-list">
         {shown.map((u) => (
           <div key={u.id} className={`admin-row ${u.status}`}>
-            <Avatar name={u.displayName} color={u.avatarColor} size={40} />
+            <Avatar name={u.displayName} color={u.avatarColor} src={u.avatarUrl} size={40} />
             <div className="grow left min0">
               <div className="ellipsis">
                 <b>{u.displayName}</b> <span className="muted">@{u.username}</span>
@@ -179,7 +179,7 @@ function GroupEditor({ groupId, onBack }) {
       <div className="admin-list">
         {g.members.map((m) => (
           <div key={m.id} className="admin-row">
-            <Avatar name={m.displayName} color={m.avatarColor} size={36} />
+            <Avatar name={m.displayName} color={m.avatarColor} src={m.avatarUrl} size={36} />
             <div className="grow left">{m.displayName} <span className="muted">@{m.username}</span> {m.memberRole !== 'member' && <span className="role-tag">{t(m.memberRole)}</span>}</div>
             <div className="admin-actions">
               {m.memberRole !== 'owner' && (
